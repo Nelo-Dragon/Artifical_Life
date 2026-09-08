@@ -1,6 +1,8 @@
 module neuron (
     input wire clk,
     input wire rst,
+    input wire [1:0] sens_in,
+    input wire [3:0] mask_in,
     input wire [3:0] in_fire,
     output reg [3:0] out_fire,
     output reg [3:0] Mask,
@@ -22,17 +24,18 @@ module neuron (
     always @(posedge clk) begin
         
         if (rst) begin
+
             accu <= 4'b0000;
             refa <= 1'b0;
-            mask <= Mask;
-            sens <= Sens;
+            mask <= mask_in;
+            sens <= sens_in;
             out_fire <= 4'b0000;
         end else begin
             
             if (refa) begin
 
                 refa <= 1'b0;
-                out_fire <= 1'b0000;
+                out_fire <= 4'b0000;
             end
             else if ((accu + in_fire) > thresh) begin
 
@@ -50,8 +53,8 @@ module neuron (
 
     always @(*) begin
 
-        Mask <= mask;
-        Sens <= sens;
+        Mask = mask;
+        Sens = sens;
     end
 
 endmodule
