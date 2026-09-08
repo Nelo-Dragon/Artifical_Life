@@ -1,41 +1,46 @@
+#include <bitset>
 #include <iostream>
 #include <memory>
-#include <bitset>
-// Verilator creates this header automatically based on the Verilog file name
-#include "Vneuron.h"
+
+#include "Vchunk.h"
 #include "verilated.h"
 
+constexpr int XS = 64;
+constexpr int YS = 32;
+constexpr int NEURON_COUNT = XS * YS;
+
 int main(int argc, char** argv) {
-    // Initialize Verilator internal state
     Verilated::commandArgs(argc, argv);
+    auto top = std::make_unique<Vchunk>();
 
-    // Instantiate your Verilog module as a standard C++ object
-    auto top = std::make_unique<Vneuron>();
-
-    // Initial state setup
     top->clk = 0;
-    top->mask_in = 0b0001;
+    top->rst = 1;
+    for (int index = 0; index < NEURON_COUNT; ++index) {
+        top->mask_msk[index] = 0b0100;
+        top->sens_msk[index] = 0b00;
+    }
+    for (int index = 0; index < XS; ++index)
+        top->in[index] = 0;
 
-    std::cout << "Starting real-time evaluation loop...\n";
+    top->eval();
+    top->clk = 1;
+    top->eval();
+    top->clk = 0;
+    top->eval();
+    top->rst = 0;
 
-    // Simulate 5 clock steps directly in C++ memory
-    for (int step = 0; step < 5; ++step) {
-        
-        // 1. Modify input signals (e.g., your C++ mutation logic)
-        top->mask_in = (top->mask_in + 1) & 0x0F;
+    std::cout << "Starting chunk simulation...\n";
+    for (int cycle = 0; cycle < 1000; ++cycle) {
+        for (int index = 0; index < XS; ++index)
+            top->in[index] = 0b1111;
 
-        // 2. Pulse the clock HIGH
         top->clk = 1;
-        top->eval(); // Evaluates the Verilog logic inside memory
-
-        // 3. Pulse the clock LOW
+        top->eval();
         top->clk = 0;
         top->eval();
 
-        // 4. Read the output state back into C++ instantly
-        std::cout << "Step " << step 
-                  << " | C++ Input: "  << std::bitset<4>(top->mask_in)
-                  << " | Verilog Output: " << std::bitset<4>(top->mask_out) 
+        std::cout << "Cycle " << cycle
+                  << " | output: " << std::bitset<XS>(top->out)
                   << std::endl;
     }
 

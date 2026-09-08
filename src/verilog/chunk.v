@@ -17,33 +17,18 @@ module chunk #(
     wire [3:0] neuron_out [0:N-1];
     reg [3:0] neuron_in [0:N-1];
 
-    integer source;
     integer target;
-    integer x;
-    integer y;
     integer output_x;
     
-    always @(*) begin
+    always_comb begin
 
-        for (target = 0; target < N; target = target + 1)
-            neuron_in[target] = 4'b0000;
-
-        for (x = 0; x < XS; x = x + 1)
-            neuron_in[x] = in[x];
-
-        for (source = 0; source < N; source = source + 1) begin
-            x = source % XS;
-            y = source / XS;
-
+        for (target = 0; target < N; target = target + 1) begin
             // Bit 0: north, bit 1: east, bit 2: south, bit 3: west.
-            if (neuron_out[source][0] && y > 0)
-                neuron_in[source - XS] = neuron_in[source - XS] + 4'd1;
-            if (neuron_out[source][1] && x < XS - 1)
-                neuron_in[source + 1] = neuron_in[source + 1] + 4'd1;
-            if (neuron_out[source][2] && y < YS - 1)
-                neuron_in[source + XS] = neuron_in[source + XS] + 4'd1;
-            if (neuron_out[source][3] && x > 0)
-                neuron_in[source - 1] = neuron_in[source - 1] + 4'd1;
+            neuron_in[target] = (target < XS ? in[target] : 4'd0)
+                + (target >= XS && neuron_out[target - XS][2] ? 4'd1 : 4'd0)
+                + (target < N - XS && neuron_out[target + XS][0] ? 4'd1 : 4'd0)
+                + (target % XS > 0 && neuron_out[target - 1][1] ? 4'd1 : 4'd0)
+                + (target % XS < XS - 1 && neuron_out[target + 1][3] ? 4'd1 : 4'd0);
         end
     end
 
@@ -66,11 +51,7 @@ module chunk #(
         end
     endgenerate
 
-    always @(*) begin
-
-        Mask_msk = mask_msk;
-        Sens_msk = Sens_msk;
-        
+    always_comb begin
         for (output_x = 0; output_x < XS; output_x = output_x + 1)
             out[output_x] = neuron_out[(YS - 1) * XS + output_x][2];
     end

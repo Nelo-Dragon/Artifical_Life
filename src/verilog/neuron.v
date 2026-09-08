@@ -10,14 +10,15 @@ module neuron (
 );
 
     reg [3:0] mask;
-    reg [3:0] accu;
+    reg [2:0] accu;
     reg [1:0] sens;
     reg refa;
 
-    wire [3:0] thresh =
-    (sens == 2'b00) ? 4'd3 :
-    (sens == 2'b01) ? 4'd7 :
-    (sens == 2'b10) ? 4'd11 : 4'd15;
+    wire [2:0] thresh =
+    (sens == 2'b00) ? 3'd1 :
+    (sens == 2'b01) ? 3'd3 :
+    (sens == 2'b10) ? 3'd5 : 3'd7;
+    wire [4:0] accu_sum = {2'b00, accu} + {1'b0, in_fire};
 
 
 
@@ -25,7 +26,7 @@ module neuron (
         
         if (rst) begin
 
-            accu <= 4'b0000;
+            accu <= 3'b000;
             refa <= 1'b0;
             mask <= mask_in;
             sens <= sens_in;
@@ -37,15 +38,15 @@ module neuron (
                 refa <= 1'b0;
                 out_fire <= 4'b0000;
             end
-            else if ((accu + in_fire) > thresh) begin
+            else if (accu_sum > {2'b00, thresh}) begin
 
                 out_fire <= mask;
-                accu <= 4'b0000;
+                accu <= 3'b000;
                 refa <= 1'b1;
             end
             else begin
                 
-                accu <= accu + in_fire;
+                accu <= accu_sum[2:0];
                 out_fire <= 4'b0000;
             end
         end

@@ -10,7 +10,7 @@ BUILD_DIR = obj_dir
 VERILOG_SRCS = $(shell find $(SRC_DIR) -name "*.v")
 
 # Your C++ testbench / driver
-CPP_SRC = main.cpp
+CPP_SRC = $(SRC_DIR)/main.cpp
 
 # Name of the top-level Verilog module
 TOP_MODULE = chunk
@@ -23,6 +23,7 @@ TARGET = run_sim
 VERILATOR_FLAGS = -Wall --cc \
                   $(VERILOG_SRCS) \
                   --top-module $(TOP_MODULE) \
+                  -GXS=64 -GYS=32 \
                   --exe $(CPP_SRC) \
                   -I$(SRC_DIR) \
                   --build \

@@ -1,0 +1,209 @@
+## 1. Notation Legend
+
+|Symbol|Meaning|
+|---|---|
+|`N`|Neuron|
+|`C`|Chunk — a local grid of neurons|
+|`A`|Accumulator — internal input pulse counter (replaces "X")|
+|`M`|Mask — 4-bit cardinal direction bitmap `[R, L, U, D]`|
+|`S`|Sensitivity — 2-bit state defining the max bit-width of `A` (i.e. firing threshold)|
+|`R`|Refractory flag — 1-bit cooldown lock preventing infinite echo loops|
+|`C_REG`|Regional chunk — a chunk sized/shaped for a specific job (memory, processing, I/O)|
+|`C_LINK`|Inter-regional highway — long-range pointers between boundary neurons of different chunks|
+
+---
+
+## 2. Neuron Architecture — Design Evolution
+
+The design went through several iterations, each trading per-neuron "smartness" for raw scale:
+
+| Version                        | Bits / Neuron | Mechanism                                                                                                                                                       | Max Neurons (Cyclone V)  |
+| ------------------------------ | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| v1 — Initial                   | ~132 bits     | 100-bit pointer cache + DSP multiplier (MAC) per neuron                                                                                                         | ~37,500                  |
+| v2 — 60-bit                    | 60 bits       | 42-bit absolute pointer cache (6×7-bit) + 16-bit weight/bias + 2-bit type flag, 32×4 grid                                                                       | ~83,000                  |
+| v3 — 46-bit (overflow model)   | 46 bits       | 42-bit output cache + 1–4 bit accumulator + 2-bit width state; fires on **integer overflow/wrap**, no multiplier needed                                         | ~108,000                 |
+| v4 — 40-bit (M10K-aligned)     | 40 bits       | Relative (Δ) offset addressing instead of absolute coordinates, aligned to M10K word size                                                                       | ~125,000                 |
+| v5 — Template-Shared           | 10–12 bits    | Neurons store only a 2–3 bit Template ID pointing into a small shared routing-pattern library                                                                   | ~416,000+                |
+| **v6 — Cardinal Mask (final)** | **10 bits**   | `M[4b] \| A[4b] \| S[2b]` — each of the 4 mask bits independently toggles a cardinal direction (R/L/U/D), so a single neuron can fire in 1–4 directions at once | ~400,000+ (memory-bound) |
+
+**Final (v6) neuron state:**
+
+```
+N_state = { M[4b] | A[4b] | S[2b] }
+```
+
+- **Input pulse:** `A ← A + 1` (if `R = 0`)
+- **Fire condition:** if `A > Max(S)` → `Fire(M)`, then `R ← 1`, `A ← 0`
+- **Mutation:** random `BitFlip(M or S)`
+
+### Why the overflow/wrap model matters
+
+Replacing weighted multiplication with **unsigned integer overflow as the activation function** eliminates the need for DSP multiplier blocks entirely — the whole neuron runs on simple adders/counters. This is what let capacity jump from ~37K to ~108K+ neurons on the same chip: DSP block count (87–112 on Cyclone V) was the original bottleneck, not memory.
+
+### Why the cardinal mask beats diagonal templates
+
+An early template scheme used 2-bit diagonal-only movement IDs (00 = up-right, 01 = up-left, etc.). This creates a **"bishop problem"**: diagonal-only movement partitions the grid into two disconnected checkerboard halves — a neuron on an "even" square can never reach an "odd" square. Switching to an independent 4-bit bitmask (one bit per cardinal direction, combinable) fixes this and adds multi-directional firing (e.g. `0101` = right + up simultaneously) at effectively zero decode latency in hardware.
+
+### Preventing runaway feedback (echo loops)
+
+Two neurons pointing at each other can trap a signal in an infinite loop. Fixes, borrowed directly from biology:
+
+- **Refractory period (`R`)** — after firing, ignore incoming pulses for 1–2 clock cycles (mirrors the biological refractory period).
+- **Auto-reset** — `A` resets to 0 immediately on fire.
+- **Inhibitory neurons** — ~20% of biological neurons are inhibitory (GABAergic); a dedicated inhibitory flag lets a firing neuron subtract from a target's accumulator instead of adding.
+- **Leaky decay (LIF)** — if no pulses arrive for N cycles, decay `A` toward 0, turning the counter into a Leaky Integrate-and-Fire neuron. Unsupported echoes fade instead of looping forever.
+
+---
+
+## 3. Chunk & Grid Design
+
+### Standard grid
+
+- **Recommended dimensions:** 32×4 (X=32 columns, Y=4 rows) = 128 neurons/chunk.
+- Keeping Y small minimizes cross-chunk addressing bits while X stays wide for internal processing.
+- Address bits: 5 bits for X (32 cols) + 2 bits for Y (4 rows) = 7 bits per absolute pointer.
+
+### Do chunks still matter with cardinal-mask local routing?
+
+Yes. Local M-mask routing alone means a signal only moves 1 neighbor per clock cycle — crossing a 100-neuron grid would take 100 cycles. Chunks solve this by acting as **regional modules** (like cortical vs. hippocampal regions) with:
+
+1. **Boundary neurons / `C_LINK`** — edge neurons with dedicated long-range pointers that jump directly to another chunk (a "highway").
+2. **Functional specialization** — different chunks tuned for different jobs.
+3. **Parallelism** — FPGA block RAM (M10K) is naturally organized in local blocks, so chunk-based parallel updates map well to hardware.
+
+### Regional (variable-sized) chunks
+
+Chunks don't need to be uniform. Proposed regional types:
+
+|Chunk Type|Example Size|Mask Bias|Role|
+|---|---|---|---|
+|`C_HIP` (Hippocampal)|16×16 = 256 N|Dense recurrent (D, L active)|Short-term memory / "echo chamber" storage — holds a pattern (e.g. a byte) until requested|
+|`C_CTX` (Cortex)|64×4 = 256 N|Forward-streaming (R, U active)|Fast pattern transformation / translation|
+|`C_IO` (Interpreter)|8×2 = 16 N|Edge-only|Converts raw binary/ASCII input streams into spatial pulse trains, and vice versa on output|
+|`C_LINK`|boundary neurons only|—|Long-range highway between regions|
+
+### Staged / modular training
+
+Training everything simultaneously causes chaos (every region mutating at once). The proposed staged approach:
+
+1. **Phase 1 — Memory pretraining:** isolate `C_HIP`, reward configurations that sustain a pattern until a recall pulse.
+2. **Phase 2 — Processor pretraining:** isolate `C_CTX`, train input→output mappings (e.g. binary addition, signal mapping).
+3. **Phase 3 — System integration:** _lock_ the internal masks of `C_HIP`/`C_CTX` and mutate only `C_LINK`, so specialized regions learn to talk to each other without corrupting what they already learned.
+
+---
+
+## 4. FPGA Capacity Math
+
+### Cyclone V SoC (e.g. DE1-SoC — 5CSEMA5/5CSXFC6 class)
+
+- Logic: ~85,000–110,000 LEs (~32,000–41,500 ALMs)
+- On-chip block RAM: ~4.4–6.2 Mb (~550–775 KB), used here as ~5,000,000 bits
+- DSP blocks: 87–112
+
+|Config|Bits/Neuron|Max Chunks|Max Neurons|
+|---|---|---|---|
+|v1 (100-bit cache + MAC)|~132|~30–80 (DSP-limited)|3,000–37,500|
+|v3 (46-bit overflow model)|46|~849|~108,672|
+|v4 (40-bit, M10K-aligned)|40|~977|~125,000|
+|v5 (Template-Shared, 12-bit)|12|~3,255|~416,640|
+|v6 (10-bit cardinal mask)|10|~3,900|~490,000 (memory-bound estimate)|
+
+### Cyclone V + external 8 GB DDR3-1600 stick
+
+- Neuron state: ~16.5 bytes (132-bit model)
+- Capacity: 8,000,000,000 / 16.5 ≈ **484 million neurons**
+- **Bottleneck:** bandwidth, not capacity. DDR3-1600 ≈ 12.8 GB/s → streaming all 484M neurons takes ~0.62s per full update cycle (**~1.6 Hz**) — orders of magnitude slower than the on-chip, fully-parallel version.
+
+### AMD Versal Premium (flagship adaptive SoC, e.g. VP1902-class)
+
+- ~18.5 million logic cells, ~1 Gbit (~125 MB) on-chip UltraRAM/Block RAM, integrated LPDDR5X up to ~288 GB/s
+- **On-chip only:** 1,000,000,000 / 132 ≈ **7.5 million neurons**, fully parallel, real-time (300+ MHz)
+- **+ 32 GB LPDDR5X:** ≈ **1.93 billion neurons**, streamed (bandwidth-limited but far faster than DDR3)
+
+> [!warning] These are back-of-envelope estimates All of the above assume idealized memory packing and ignore routing congestion, clock distribution overhead, and control logic — the original estimates themselves flag "realistic" numbers as roughly **half to a third** of the theoretical ceiling once P&R (place-and-route) overhead is accounted for.
+
+---
+
+## 5. Biological Reference Numbers
+
+### Human vs. rat neuron counts by region
+
+|Brain Region|Human|Rat|Note|
+|---|---|---|---|
+|Cerebral Cortex (total)|~16 billion|~21 million|Human cortex is folded (gyrencephalic); rat cortex is smooth|
+|Frontal/Prefrontal Cortex|~3.5–4.5 billion|~3–4 million|Humans devote far more cortex to executive function|
+|Visual/Auditory/Sensory Cortex|~6–7 billion|~8–10 million|Rats lean on whisker/barrel cortex + olfaction|
+|Hippocampus (both hemispheres)|~30–40 million|~1.2–2 million|Proportionally larger in rats (spatial navigation)|
+|Cerebellum|~69 billion|~130 million|~80% of all neurons in both species|
+|Olfactory Bulb|~10 million|~25–30 million|Rats have _more_ neurons here than humans|
+|Brainstem/Subcortical|~700 million|~15–20 million|Basic survival functions|
+|**Total**|**~86 billion**|**~200 million**|Humans: ~430× more neurons|
+|Glia (non-neuronal)|~84 billion (~1:1 w/ neurons)|~130 million|—|
+
+### Neuron count vs. achievable FPGA scale (illustrative only — see §7 caveats)
+
+|Organism|Approx. Neurons|Comparable Config (by count only)|
+|---|---|---|
+|_C. elegans_ (roundworm)|302|~3 chunks, any config|
+|Tardigrade|~200|~2 chunks|
+|Jellyfish (Hydra)|~5,000|~50 chunks|
+|Fruit fly|~135,000|Cyclone V v3–v6 on-chip range|
+|Ant|~250,000|Template/mask model on Cyclone V|
+|Honeybee|~1,000,000|Versal on-chip range|
+|Mouse|~70,000,000|Between Cyclone V+DDR3 and Versal+LPDDR5X|
+|Rat|~200,000,000|Cyclone V + DDR3 (streamed, ~1.6 Hz)|
+|Cat|~1,000,000,000|Versal + LPDDR5X range|
+|Human|~86,000,000,000|Far beyond any single-board config described here|
+
+---
+
+## 6. Biological Neuron vs. LLM "Neuron"
+
+- **Biological neuron:** dendrites collect chemical signals → soma sums excitatory/inhibitory charge → if it crosses a voltage threshold (~-55 mV) at the axon hillock, it fires an all-or-nothing action potential ("spike") down the axon.
+- **Binary or not?** Both. The _spike itself_ is strictly binary (fires or doesn't, always the same height). But information is encoded in a _non-binary_ way through **spike rate/frequency** and **timing**, plus continuously-variable synaptic (connection) strength.
+- **LLM "neuron":** a mathematical unit computing a weighted sum + nonlinearity, part of a static matrix multiplication. It doesn't fire "over time" the way a biological or spiking neuron does — it's evaluated once per forward pass.
+- **This project's neuron:** closer to the biological spiking model (all-or-nothing fire on threshold/overflow) than to an LLM unit, but far simpler than either — no continuous synaptic weights, no learned embeddings, no gradient-based credit assignment.
+
+---
+
+## 7. This System vs. Conway's Game of Life vs. LLM
+
+|Feature|Conway's Game of Life|Traditional LLM|This System|
+|---|---|---|---|
+|Basic unit|Cell (alive/dead)|Vector / token weight|Neuron (`N`)|
+|Layout|2D spatial grid|Deep unfolded layers|Spatial grids (`C`)|
+|Rules|Fixed local neighbor checks|Global matrix multiplication|Dynamic cardinal mask (`M`)|
+|Trigger|Living neighbor count (2 or 3)|Math activation functions|Accumulator overflow (`A`)|
+|Time|Discrete clock steps|Static feed-forward pass|Event-driven clock cycles|
+|Learning|None (fixed rules)|Gradient descent / backprop|GA bit-flip mutation|
+
+This is genuinely a reasonable way to describe the project: it's an **evolvable cellular automaton with sparse neural routing** — a digital ecosystem, not a super-calculator. It won't pass a Turing test out of the box, because it isn't built on language data or gradient-trained representations; it's built to simulate the emergent, physically-constrained dynamics of biological tissue.
+
+---
+
+## 8. Proposed Language-Learning Curriculum (as designed)
+
+|Phase|Goal|Estimated Time (as originally proposed)|
+|---|---|---|
+|1 — Signal grounding|ASCII in → memory echo → main brain → ASCII out, 95% repetition on a single character|Hours to 1–2 days|
+|2 — Short sequences|Reliably reproduce 2–5 letter words (CAT, HAT, SAT)|1–3 weeks|
+|3 — Basic syntax|Recognize/complete kindergarten-level sentences ("the cat sat on the hat")|1–3+ months|
+
+**Named bottlenecks:**
+
+- **Fitness-function bottleneck** — if the evaluator runs on a host PC over UART/JTAG, data transfer speed (not the FPGA itself) becomes the limiting factor.
+- **Fitness cascades** — a mutation that helps a later stage (e.g. 2-letter recognition) can silently break an earlier one (1-letter recognition) unless earlier pathways are frozen/locked before moving on.
+
+---
+
+## 10. Open Questions / Next Steps
+
+- [ ] Decide: pursue the 46-bit custom-wiring model (higher per-neuron expressiveness, ~108K neurons) or the cardinal-mask/template model (lower per-neuron expressiveness, ~400K+ neurons)?
+- [ ] Build the automated training harness _on_ the FPGA (avoid host-PC UART bottleneck for fitness evaluation)
+- [ ] Prototype `C_HIP` / `C_CTX` / `C_IO` regional chunk sizing before committing to a fixed layout
+- [ ] Define the refractory/inhibitory/decay parameters concretely (values, not just mechanisms)
+- [ ] Decide on a realistic, scoped success criterion (e.g. "stable emergent wave patterns," "reliable byte-recall memory chunk") before attempting full sentence-level language
+
+---
+
+_Compiled as a reference/design doc from project design notes. Capacity figures are back-of-envelope hardware estimates, not verified synthesis/P&R results — expect real numbers to land lower once routing and control logic are accounted for._
