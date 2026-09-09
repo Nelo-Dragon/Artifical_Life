@@ -6,7 +6,9 @@ module neuron (
     input wire [3:0] in_fire,
     output reg [3:0] out_fire,
     output reg [3:0] Mask,
-    output reg [1:0] Sens
+    output reg [1:0] Sens,
+    output wire [2:0] Accu,
+    output wire [2:0] Thresh
 );
 
     reg [3:0] mask;
@@ -19,6 +21,9 @@ module neuron (
     (sens == 2'b01) ? 3'd3 :
     (sens == 2'b10) ? 3'd5 : 3'd7;
     wire [4:0] accu_sum = {2'b00, accu} + {1'b0, in_fire};
+
+    assign Accu = accu;
+    assign Thresh = thresh;
 
 
 

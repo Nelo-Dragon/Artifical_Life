@@ -21,7 +21,13 @@ struct CudaGenome {
     std::uint8_t inputs[CUDA_XS];
 };
 
+struct CudaEvaluation {
+    int fitness = 0;
+    float rankingFitness = 0.0f;
+    float tiebreaker = 0.0f;
+    std::uint64_t output = 0;
+};
+
 void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
                             std::uint64_t wantedOutput,
-                            std::vector<int>& hostFitness,
-                            std::vector<std::uint64_t>& hostBestOutput);
+                            std::vector<CudaEvaluation>& hostEvaluations);

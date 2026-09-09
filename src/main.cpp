@@ -1,26 +1,40 @@
 #include <array>
 #include <algorithm>
+#include <arpa/inet.h>
 #include <bitset>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <mutex>
+#include <netinet/in.h>
 #include <memory>
 #include <random>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <atomic>
 #include <vector>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "Vchunk.h"
 #include "verilated.h"
 
-constexpr int XS = 16;
-constexpr int YS = 16;
+#ifndef MAIN_XS
+#define MAIN_XS 8
+#endif
+#ifndef MAIN_YS
+#define MAIN_YS 8
+#endif
+constexpr int XS = MAIN_XS;
+constexpr int YS = MAIN_YS;
 constexpr int NEURON_COUNT = XS * YS;
 constexpr std::size_t POPULATION_SIZE = 256;
 constexpr std::size_t ELITE_COUNT = POPULATION_SIZE / 5;
 constexpr int SIMULATION_CYCLES = 32;
 constexpr double MUTATION_RATE = 0.04;
+constexpr double MIN_FITNESS_WEIGHT = 0.6;
+constexpr double AVERAGE_FITNESS_WEIGHT = 0.4;
 
 struct ChunkGenome {
     std::array<std::uint8_t, NEURON_COUNT> masks{};
@@ -31,7 +45,12 @@ struct ChunkGenome {
 struct EvaluatedGenome {
     ChunkGenome genome;
     int fitness = 0;
+    double rankingFitness = 0.0;
+    double tiebreaker = 0.0;
     std::uint64_t output = 0;
+    std::array<std::uint8_t, NEURON_COUNT> fire{};
+    std::array<std::uint8_t, NEURON_COUNT> accu{};
+    std::array<std::uint8_t, NEURON_COUNT> thresh{};
 };
 
 struct WantedPattern {
@@ -40,6 +59,134 @@ struct WantedPattern {
     std::string inputBits;
     std::string outputBits;
 };
+
+struct ProgressSnapshot {
+    EvaluatedGenome best;
+    std::uint64_t wanted = 0;
+    std::uint64_t input = 0;
+    std::size_t generation = 0;
+    std::size_t target = 0;
+    std::size_t targetCount = 0;
+    bool finished = false;
+};
+
+std::mutex progressMutex;
+ProgressSnapshot progress;
+std::atomic<bool> progressServerRunning{true};
+
+std::string progressJson() {
+    std::lock_guard<std::mutex> lock(progressMutex);
+    std::ostringstream json;
+    json << "{\"xs\":" << XS << ",\"ys\":" << YS
+         << ",\"generation\":" << progress.generation
+         << ",\"target\":" << progress.target
+         << ",\"target_count\":" << progress.targetCount
+         << ",\"fitness\":" << progress.best.fitness
+         << ",\"ranking_fitness\":" << progress.best.rankingFitness
+         << ",\"output\":[";
+    for (int index = 0; index < XS; ++index) {
+        if (index) json << ',';
+        json << ((progress.best.output >> index) & 1);
+    }
+    json << "],\"wanted\":[";
+    for (int index = 0; index < XS; ++index) {
+        if (index) json << ',';
+        json << ((progress.wanted >> index) & 1);
+    }
+    json << "],\"input\":[";
+    for (int index = 0; index < XS; ++index) {
+        if (index) json << ',';
+        json << ((progress.input >> (XS - 1 - index)) & 1);
+    }
+    json << "],\"mask\":[";
+    for (int index = 0; index < NEURON_COUNT; ++index) {
+        if (index) json << ',';
+        json << static_cast<unsigned>(progress.best.genome.masks[index]);
+    }
+    json << "],\"sens\":[";
+    for (int index = 0; index < NEURON_COUNT; ++index) {
+        if (index) json << ',';
+        json << static_cast<unsigned>(progress.best.genome.sensitivities[index]);
+    }
+    json << "],\"fire\":[";
+    for (int index = 0; index < NEURON_COUNT; ++index) {
+        if (index) json << ',';
+        json << static_cast<unsigned>(progress.best.fire[index]);
+    }
+    json << "],\"accu\":[";
+    for (int index = 0; index < NEURON_COUNT; ++index) {
+        if (index) json << ',';
+        json << static_cast<unsigned>(progress.best.accu[index]);
+    }
+    json << "],\"thresh\":[";
+    for (int index = 0; index < NEURON_COUNT; ++index) {
+        if (index) json << ',';
+        json << static_cast<unsigned>(progress.best.thresh[index]);
+    }
+    json << "],\"finished\":" << (progress.finished ? "true" : "false") << '}';
+    return json.str();
+}
+
+void sendProgressResponse(int client, const std::string& type,
+                          const std::string& body) {
+    std::ostringstream response;
+    response << "HTTP/1.1 200 OK\r\nContent-Type: " << type
+             << "\r\nContent-Length: " << body.size()
+             << "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+             << body;
+    const std::string data = response.str();
+    send(client, data.data(), data.size(), 0);
+}
+
+void runProgressServer() {
+    const int server = socket(AF_INET, SOCK_STREAM, 0);
+    if (server < 0) return;
+    int reuse = 1;
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(8082);
+    if (bind(server, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0 ||
+        listen(server, 8) < 0) {
+        close(server);
+        return;
+    }
+    std::cout << "Main trainer dashboard: http://localhost:8082\n";
+    while (progressServerRunning) {
+        const int client = accept(server, nullptr, nullptr);
+        if (client < 0) continue;
+        char request[2048];
+        const ssize_t received = recv(client, request, sizeof(request) - 1, 0);
+        if (received > 0) {
+            request[received] = '\0';
+            const std::string line(request, received);
+            if (line.rfind("GET /api/state ", 0) == 0 ||
+                line.rfind("POST /api/generation ", 0) == 0) {
+                sendProgressResponse(client, "application/json", progressJson());
+            } else {
+                std::ifstream page("web/trainer.html", std::ios::binary);
+                std::ostringstream contents;
+                contents << page.rdbuf();
+                sendProgressResponse(client, "text/html; charset=utf-8", contents.str());
+            }
+        }
+        close(client);
+    }
+    close(server);
+}
+
+void publishProgress(const EvaluatedGenome& best, std::uint64_t input,
+                     std::uint64_t wanted, std::size_t generation,
+                     std::size_t target, std::size_t targetCount) {
+    std::lock_guard<std::mutex> lock(progressMutex);
+    progress.best = best;
+    progress.input = input;
+    progress.wanted = wanted;
+    progress.generation = generation;
+    progress.target = target;
+    progress.targetCount = targetCount;
+}
 
 std::string binaryPart(const std::string& text) {
     std::string result;
@@ -61,6 +208,13 @@ bool parseBits(const std::string& text, std::uint64_t& value) {
 
     value = std::bitset<XS>(bits).to_ullong();
     return true;
+}
+
+std::uint64_t reverseBits(std::uint64_t value) {
+    std::uint64_t reversed = 0;
+    for (int index = 0; index < XS; ++index)
+        reversed |= ((value >> index) & 1) << (XS - 1 - index);
+    return reversed;
 }
 
 bool loadWantedPatterns(const std::string& path,
@@ -108,6 +262,9 @@ bool loadWantedPatterns(const std::string& path,
                       << ": expected exactly " << XS << " binary bits\n";
             return false;
         }
+        // File bit 0 is the rightmost character; map the leftmost file bit
+        // to physical grid column 0, matching the input-row mapping.
+        pattern.output = reverseBits(pattern.output);
         if (pattern.inputBits.empty())
             pattern.inputBits = std::bitset<XS>(pattern.input).to_string();
         patterns.push_back(pattern);
@@ -146,15 +303,16 @@ ChunkGenome randomGenome(std::mt19937& random) {
 }
 
 void mutateGenome(ChunkGenome& genome, std::mt19937& random) {
-    std::bernoulli_distribution mutate(MUTATION_RATE);
+    std::bernoulli_distribution mutateMask(MUTATION_RATE);
+    std::bernoulli_distribution mutateSensitivity(std::min(1.0, MUTATION_RATE * 1.5));
     std::uniform_int_distribution<int> maskBit(0, 3);
     std::uniform_int_distribution<int> sensitivityBit(0, 1);
     for (auto& value : genome.masks) {
-        if (mutate(random))
+        if (mutateMask(random))
             value ^= static_cast<std::uint8_t>(1u << maskBit(random));
     }
     for (auto& value : genome.sensitivities) {
-        if (mutate(random))
+        if (mutateSensitivity(random))
             value ^= static_cast<std::uint8_t>(1u << sensitivityBit(random));
     }
 }
@@ -195,6 +353,13 @@ EvaluatedGenome evaluateGenome(const ChunkGenome& genome,
     top->rst = 0;
 
     EvaluatedGenome evaluated{genome};
+    const int warmupCycles = YS - 1;
+    int bestFitness = -1;
+    int bestError = XS + 1;
+    double bestTiebreaker = 0.0;
+    int scoredCycles = 0;
+    double fitnessTotal = 0.0;
+    double tiebreakerTotal = 0.0;
     for (int cycle = 0; cycle < SIMULATION_CYCLES; ++cycle) {
         top->clk = 1;
         top->eval();
@@ -202,19 +367,49 @@ EvaluatedGenome evaluateGenome(const ChunkGenome& genome,
         top->eval();
 
         const std::uint64_t output = top->out;
-        const int fitness = static_cast<int>(__builtin_popcountll(output ^ wantedOutput));
-        if (cycle == 0 || fitness < evaluated.fitness) {
-            evaluated.fitness = fitness;
-            evaluated.output = output;
+        if (cycle < warmupCycles)
+            continue;
+
+        const int error = static_cast<int>(__builtin_popcountll(output ^ wantedOutput));
+        const int fitness = XS - error;
+        double tiebreaker = 0.0;
+        for (int x = 0; x < XS; ++x) {
+            const int index = (YS - 1) * XS + x;
+            const int threshold = top->thresh_msk[index];
+            const int accumulator = top->accu_msk[index];
+            const bool wanted = ((wantedOutput >> x) & 1) != 0;
+            tiebreaker += wanted ? threshold - accumulator : accumulator;
         }
+        if (fitness > bestFitness ||
+            (fitness == bestFitness && tiebreaker < bestTiebreaker)) {
+            bestFitness = fitness;
+            bestError = error;
+            bestTiebreaker = tiebreaker;
+            evaluated.output = output;
+            for (int index = 0; index < NEURON_COUNT; ++index) {
+                evaluated.fire[index] = top->fire_msk[index];
+                evaluated.accu[index] = top->accu_msk[index];
+                evaluated.thresh[index] = top->thresh_msk[index];
+            }
+        }
+        fitnessTotal += fitness;
+        tiebreakerTotal += tiebreaker;
+        ++scoredCycles;
     }
-    evaluated.fitness = XS - evaluated.fitness;
+    const double averageFitness = fitnessTotal / scoredCycles;
+    evaluated.rankingFitness = MIN_FITNESS_WEIGHT * bestFitness
+        + AVERAGE_FITNESS_WEIGHT * averageFitness;
+    evaluated.fitness = bestFitness;
+    evaluated.tiebreaker = bestTiebreaker;
     return evaluated;
 }
 
 std::vector<EvaluatedGenome> evolve(std::vector<ChunkGenome> pool,
                                     std::uint64_t wantedOutput,
-                                    std::mt19937& random) {
+                                    std::uint64_t inputPattern,
+                                    std::mt19937& random,
+                                    std::size_t targetIndex,
+                                    std::size_t targetCount) {
     std::vector<EvaluatedGenome> evaluated;
     std::uniform_int_distribution<std::size_t> parent(0, ELITE_COUNT - 1);
 
@@ -247,12 +442,18 @@ std::vector<EvaluatedGenome> evolve(std::vector<ChunkGenome> pool,
 
         std::sort(evaluated.begin(), evaluated.end(),
                   [](const EvaluatedGenome& first, const EvaluatedGenome& second) {
-                      return first.fitness > second.fitness;
+                      if (first.fitness != second.fitness)
+                          return first.fitness > second.fitness;
+                      if (first.rankingFitness != second.rankingFitness)
+                          return first.rankingFitness > second.rankingFitness;
+                      return first.tiebreaker < second.tiebreaker;
                   });
 
         std::cout << "Generation " << generation
                   << " | best fitness: " << evaluated.front().fitness
                   << "/" << XS << "\n";
+        publishProgress(evaluated.front(), inputPattern, wantedOutput,
+                generation, targetIndex, targetCount);
 
         if (evaluated.front().fitness == XS)
             break;
@@ -338,15 +539,22 @@ int main(int argc, char** argv) {
 
     std::mt19937 random(0xA17F2026u);
     auto pool = createGenePool(random);
+    std::thread progressThread(runProgressServer);
 
     for (std::size_t patternIndex = 0; patternIndex < patterns.size(); ++patternIndex) {
         const auto& pattern = patterns[patternIndex];
+        // Each target can require a different spatial route. Re-seed the
+        // population so a previous target's specialized genes cannot block
+        // discovery of the next target's route.
+        if (patternIndex > 0)
+            pool = createGenePool(random);
         applyInputPattern(pool, pattern.input);
         std::cout << "Target " << (patternIndex + 1) << "/" << patterns.size()
                   << " | input: " << pattern.inputBits
                   << " | wanted output: " << pattern.outputBits << "\n";
 
-        const auto evaluated = evolve(pool, pattern.output, random);
+        const auto evaluated = evolve(pool, pattern.output, pattern.input, random,
+                          patternIndex, patterns.size());
         if (evaluated.empty()) {
             std::cerr << "Target " << (patternIndex + 1)
                       << " produced an empty evaluation pool\n";
@@ -365,6 +573,13 @@ int main(int argc, char** argv) {
 
     std::cout << "Completed " << patterns.size()
               << " wanted outputs. Saved gene_pool.txt\n";
+
+    {
+        std::lock_guard<std::mutex> lock(progressMutex);
+        progress.finished = true;
+    }
+    progressServerRunning = false;
+    progressThread.detach();
 
     return 0;
 }

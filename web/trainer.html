@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Main trainer progress</title>
+<style>
+:root{--bg:#0d1215;--panel:#172025;--line:#34434a;--ink:#e9eef2;--muted:#8e9ba6;--accent:#f2b84b;--hot:#f06b4f;--cool:#69c2b2}
+*{box-sizing:border-box}body{margin:0;color:var(--ink);background:radial-gradient(circle at 70% 0,#27343a,var(--bg) 45%);font:14px/1.4 ui-sans-serif,system-ui,sans-serif}.shell{width:min(1100px,100%);margin:auto;padding:28px 18px 40px}header{display:flex;justify-content:space-between;align-items:end;margin-bottom:20px}.kicker,.label{color:var(--muted);font-size:11px;letter-spacing:.12em;text-transform:uppercase}h1{margin:5px 0 0;font:700 clamp(30px,5vw,54px)/.95 Georgia,serif}.status{text-align:right;color:var(--muted)}.panel{background:color-mix(in srgb,var(--panel) 94%,transparent);border:1px solid var(--line);border-radius:8px;padding:18px}.toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px}.readout{display:flex;gap:18px;margin-left:auto}.readout strong{color:var(--accent);font-size:22px}.readout span{display:block;color:var(--muted);font-size:10px;text-transform:uppercase}.edge{display:grid;grid-template-columns:repeat(var(--xs),1fr);gap:4px;margin:6px 0 14px}.bit{border:1px solid var(--line);background:#11191d;color:var(--muted);border-radius:4px;padding:6px 2px}.bit.on{background:var(--accent);border-color:var(--accent);color:#17120a}.bit.out{background:var(--cool);border-color:var(--cool);color:#09201d}.grid{display:grid;gap:3px;grid-template-columns:repeat(var(--xs),1fr);aspect-ratio:1/2;background:#0a0e10;padding:8px;border:1px solid var(--line);border-radius:5px}.cell{min-width:0;min-height:0;border:1px solid #29363b;border-radius:3px;background:linear-gradient(to top,#69a99e 0%,#69a99e var(--charge,0%),#1a2529 var(--charge,0%),#1a2529 100%);cursor:help;transition:background .12s,border-color .12s,transform .12s}.cell:hover{border-color:var(--ink);transform:scale(1.08);z-index:1}.cell.fire{background:var(--hot);border-color:#ffd08c;box-shadow:0 0 10px #f06b4f88}.note{color:var(--muted);margin:8px 0}.legend{display:flex;gap:16px;color:var(--muted);font-size:12px}.button{border:1px solid var(--line);border-radius:5px;background:#202b30;color:var(--ink);padding:10px 14px;cursor:pointer}.button.primary{background:var(--accent);border-color:var(--accent);color:#18140b;font-weight:700}.button:disabled{opacity:.5;cursor:wait}@media(max-width:650px){header{display:block}.status{text-align:left;margin-top:12px}.readout{margin-left:0}}
+</style>
+</head>
+<body>
+<main class="shell">
+<header><div><div class="kicker">main.cpp / live population</div><h1>Trainer progress</h1></div><div class="status"><span id="status">connecting</span><br><span id="shape"></span></div></header>
+<section class="panel">
+<div class="toolbar"><div><div class="label">Target</div><strong id="target">0 / 0</strong></div><div class="readout"><div><strong id="generation">0</strong><span>generation</span></div><div><strong id="fitness">0</strong><span>fitness</span></div></div></div>
+<div class="label">Input pattern from wanted_outputs.txt</div><div id="input" class="edge"></div>
+<div class="label">Best chunk in the current generation</div><div id="grid" class="grid"></div>
+<div class="label">Output / wanted</div><div id="output" class="edge"></div>
+<div class="note">Cells fill toward their firing threshold. Red cells fired in the best recorded output frame. Hover a cell to inspect its genes and live activation.</div><div class="legend"><span id="score-detail"></span><span id="finished"></span></div>
+</section>
+</main>
+<script>
+const $=selector=>document.querySelector(selector);let state=null;
+async function request(path){const response=await fetch(path,{cache:'no-store'});if(!response.ok)throw Error(await response.text());return response.json()}
+function bits(value,width){return Number(value).toString(2).padStart(width,'0')}
+function renderEdge(id,values,kind){const row=$(`#${id}`);row.replaceChildren();values.forEach((value,index)=>{const cell=document.createElement('div');cell.className=`bit${value?' '+kind:''}`;cell.textContent=value?'1':'0';row.append(cell)})}
+function render(next){state=next;document.documentElement.style.setProperty('--xs',state.xs);$('#status').textContent='live / main.cpp';$('#shape').textContent=`${state.xs} columns × ${state.ys} rows`;$('#target').textContent=`${state.target+1} / ${state.target_count}`;$('#generation').textContent=state.generation;$('#fitness').textContent=state.fitness;$('#score-detail').textContent=`output ${bits(state.output.reduce((value,bit,index)=>value|(bit<<index),0),state.xs)} · wanted ${bits(state.wanted.reduce((value,bit,index)=>value|(bit<<index),0),state.xs)}`;$('#finished').textContent=state.finished?'trainer finished':'';
+renderEdge('input',state.input,'on');renderEdge('output',state.output,'out');const grid=$('#grid');grid.replaceChildren();state.mask.forEach((mask,index)=>{const threshold=state.thresh[index]||1;const charge=Math.min(100,state.accu[index]/threshold*100);const cell=document.createElement('div');cell.className='cell'+(state.fire[index]?' fire':'');cell.style.setProperty('--charge',`${charge}%`);const x=index%state.xs;const y=Math.floor(index/state.xs);cell.title=`Neuron ${index} (${x}, ${y})\nmask N E S W: ${bits(mask,4)}\nsensitivity: ${state.sens[index]}\nactivation: ${state.accu[index]} / ${threshold}\nfire N E S W: ${bits(state.fire[index],4)}`;grid.append(cell)})}
+async function poll(){try{render(await request('/api/state'))}catch(error){$('#status').textContent=error.message}setTimeout(poll,250)}poll();
+</script>
+</body>
+</html>

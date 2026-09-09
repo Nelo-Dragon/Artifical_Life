@@ -23,6 +23,8 @@ struct Target {
 struct RankedGenome {
     CudaGenome genome{};
     int fitness = 0;
+    float rankingFitness = 0.0f;
+    float tiebreaker = 0.0f;
     std::uint64_t output = 0;
 };
 
@@ -110,15 +112,16 @@ CudaGenome randomGenome(std::mt19937& random) {
 }
 
 void mutate(CudaGenome& genome, std::mt19937& random) {
-    std::bernoulli_distribution shouldMutate(MUTATION_RATE);
+    std::bernoulli_distribution mutateMask(MUTATION_RATE);
+    std::bernoulli_distribution mutateSensitivity(std::min(1.0, MUTATION_RATE * 1.5));
     std::uniform_int_distribution<int> maskBit(0, 3);
     std::uniform_int_distribution<int> sensitivityBit(0, 1);
     for (auto& value : genome.masks) {
-        if (shouldMutate(random))
+        if (mutateMask(random))
             value ^= static_cast<std::uint8_t>(1u << maskBit(random));
     }
     for (auto& value : genome.sensitivities) {
-        if (shouldMutate(random))
+        if (mutateSensitivity(random))
             value ^= static_cast<std::uint8_t>(1u << sensitivityBit(random));
     }
 }
@@ -145,16 +148,21 @@ CudaGenome crossover(const CudaGenome& first, const CudaGenome& second,
 
 std::vector<RankedGenome> rankPopulation(const std::vector<CudaGenome>& population,
                                          std::uint64_t wantedOutput) {
-    std::vector<int> fitness;
-    std::vector<std::uint64_t> outputs;
-    evaluatePopulationCuda(population, wantedOutput, fitness, outputs);
+    std::vector<CudaEvaluation> evaluations;
+    evaluatePopulationCuda(population, wantedOutput, evaluations);
 
     std::vector<RankedGenome> ranked(population.size());
     for (std::size_t index = 0; index < population.size(); ++index)
-        ranked[index] = {population[index], fitness[index], outputs[index]};
+        ranked[index] = {population[index], evaluations[index].fitness,
+                         evaluations[index].rankingFitness,
+                         evaluations[index].tiebreaker, evaluations[index].output};
     std::sort(ranked.begin(), ranked.end(),
               [](const RankedGenome& first, const RankedGenome& second) {
-                  return first.fitness > second.fitness;
+                  if (first.fitness != second.fitness)
+                      return first.fitness > second.fitness;
+                  if (first.rankingFitness != second.rankingFitness)
+                      return first.rankingFitness > second.rankingFitness;
+                  return first.tiebreaker < second.tiebreaker;
               });
     return ranked;
 }

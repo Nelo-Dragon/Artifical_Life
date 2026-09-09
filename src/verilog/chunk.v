@@ -9,6 +9,9 @@ module chunk #(
     input wire [3:0] in [0:XS-1],
     output wire [3:0] Mask_msk [0:(XS*YS)-1],
     output wire [1:0] Sens_msk [0:(XS*YS)-1],
+    output wire [3:0] fire_msk [0:(XS*YS)-1],
+    output wire [2:0] accu_msk [0:(XS*YS)-1],
+    output wire [2:0] thresh_msk [0:(XS*YS)-1],
     output reg [XS - 1:0] out
 );
     
@@ -72,7 +75,10 @@ module chunk #(
                 .out_fire(neuron_out[i]),
                 .Mask(Mask_msk[i]),
                 .Sens(Sens_msk[i])
+                ,.Accu(accu_msk[i])
+                ,.Thresh(thresh_msk[i])
             );
+            assign fire_msk[i] = neuron_out[i];
         end
     endgenerate
 

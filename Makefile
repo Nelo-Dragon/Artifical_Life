@@ -5,18 +5,29 @@ CXX = g++
 # Directories
 SRC_DIR = src
 BUILD_DIR = obj_dir
+SIM_BUILD_DIR = obj_sim
+TRAIN_BUILD_DIR = obj_train
 
 # Find ALL .v files in SRC_DIR and all of its subdirectories
 VERILOG_SRCS = $(shell find $(SRC_DIR) -name "*.v")
 
 # Your C++ testbench / driver
 CPP_SRC = $(SRC_DIR)/main.cpp
+SIM_CPP_SRC = $(SRC_DIR)/sim_server.cpp
 
 # Name of the top-level Verilog module
 TOP_MODULE = chunk
 
 # Target executable name
 TARGET = run_sim
+MAIN_XS ?= 8
+MAIN_YS ?= 8
+SIM_TARGET = sim_server
+TRAIN_TARGET = trainer_server
+SIM_XS ?= 4
+SIM_YS ?= 8
+TRAIN_XS ?= 4
+TRAIN_YS ?= 8
 CUDA_ARCH ?= sm_75
 CUDA_HOME ?= /usr/local/cuda-13.3
 NVCC ?= $(CUDA_HOME)/bin/nvcc
@@ -31,13 +42,36 @@ CUDA_DIMENSIONS = -DTRAIN_XS=$(CUDA_XS) -DTRAIN_YS=$(CUDA_YS)
 VERILATOR_FLAGS = -Wall --cc \
                   $(VERILOG_SRCS) \
                   --top-module $(TOP_MODULE) \
-                  -GXS=64 -GYS=32 \
+				  -GXS=$(MAIN_XS) -GYS=$(MAIN_YS) \
                   --exe $(CPP_SRC) \
                   -I$(SRC_DIR) \
                   --build \
+				  -CFLAGS "-DMAIN_XS=$(MAIN_XS) -DMAIN_YS=$(MAIN_YS)" \
                   -o $(TARGET)
 
-.PHONY: all clean cuda cuda-train
+SIM_VERILATOR_FLAGS = -Wall --cc \
+				  $(VERILOG_SRCS) \
+				  --top-module $(TOP_MODULE) \
+				  -GXS=$(SIM_XS) -GYS=$(SIM_YS) \
+				  --exe $(SIM_CPP_SRC) \
+				  -I$(SRC_DIR) \
+				  --Mdir $(SIM_BUILD_DIR) \
+				  --build \
+				  -CFLAGS "-DSIM_XS=$(SIM_XS) -DSIM_YS=$(SIM_YS)" \
+				  -o $(SIM_TARGET)
+
+TRAIN_VERILATOR_FLAGS = -Wall --cc \
+				  $(VERILOG_SRCS) \
+				  --top-module $(TOP_MODULE) \
+				  -GXS=$(TRAIN_XS) -GYS=$(TRAIN_YS) \
+				  --exe $(SRC_DIR)/trainer_server.cpp \
+				  -I$(SRC_DIR) \
+				  --Mdir $(TRAIN_BUILD_DIR) \
+				  --build \
+				  -CFLAGS "-DSIM_XS=$(TRAIN_XS) -DSIM_YS=$(TRAIN_YS)" \
+				  -o $(TRAIN_TARGET)
+
+.PHONY: all run sim sim-build train train-build clean cuda cuda-train
 
 all:
 	$(VERILATOR) $(VERILATOR_FLAGS)
@@ -45,8 +79,21 @@ all:
 run: all
 	./$(BUILD_DIR)/$(TARGET)
 
+sim-build:
+	$(VERILATOR) $(SIM_VERILATOR_FLAGS)
+
+sim: sim-build
+	./$(SIM_BUILD_DIR)/$(SIM_TARGET)
+
+train-build:
+	$(VERILATOR) $(TRAIN_VERILATOR_FLAGS)
+
+train:
+	$(MAKE) train-build
+	./$(TRAIN_BUILD_DIR)/$(TRAIN_TARGET)
+
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(SIM_BUILD_DIR) $(TRAIN_BUILD_DIR)
 
 cuda:
 	mkdir -p $(BUILD_DIR)

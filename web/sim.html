@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chunk observatory</title>
+<style>
+:root {
+  --ink: #e9eef2;
+  --muted: #8e9ba6;
+  --panel: #172025;
+  --panel-2: #202b30;
+  --line: #34434a;
+  --accent: #f2b84b;
+  --hot: #f06b4f;
+  --cool: #69c2b2;
+  --bg: #0d1215;
+}
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); background: radial-gradient(circle at 75% 0%, #27343a 0, var(--bg) 42%); font: 14px/1.4 ui-sans-serif, system-ui, sans-serif; }
+button, input { font: inherit; }
+button { cursor: pointer; color: var(--ink); border: 1px solid var(--line); background: var(--panel-2); border-radius: 5px; }
+button:hover { border-color: var(--accent); }
+.shell { width: min(1500px, 100%); margin: auto; padding: 28px clamp(16px, 4vw, 56px) 46px; }
+header { display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 26px; }
+h1 { margin: 0; font: 700 clamp(28px, 4vw, 52px)/.95 Georgia, serif; letter-spacing: 0; }
+.kicker { color: var(--accent); text-transform: uppercase; letter-spacing: .14em; font-size: 11px; margin-bottom: 8px; }
+.status { color: var(--muted); text-align: right; }
+.layout { display: block; }
+.panel { background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 16px 35px #0003; }
+.stage { padding: 18px; min-width: 0; }
+.stage-head, .control-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.stage-head { margin-bottom: 14px; }
+.label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .1em; }
+#grid { display: grid; gap: 2px; padding: 8px; background: #0a0e10; border: 1px solid var(--line); border-radius: 5px; aspect-ratio: 2 / 1; }
+.grid-wrap { position: relative; }
+.fire-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.fire-arrow { fill: none; stroke: #9bd6c9; stroke-width: .55; stroke-linecap: round; stroke-dasharray: 1.5 2; opacity: 0; animation: signal-travel .48s ease-out forwards; }
+@keyframes signal-travel { 0% { opacity: 0; stroke-dashoffset: 3.5; } 20% { opacity: .78; } 100% { opacity: 0; stroke-dashoffset: 0; } }
+.edge-row { display: grid; grid-template-columns: repeat(var(--xs), minmax(0, 1fr)); gap: 3px; }
+.edge-bit { min-width: 0; padding: 5px 1px; color: var(--muted); background: #11191d; font-size: 10px; }
+.edge-bit.on { color: #17120a; background: var(--accent); border-color: var(--accent); }
+.edge-bit.output-on { color: #09201d; background: var(--cool); border-color: var(--cool); }
+.edge-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin: 12px 0 5px; }
+.cell { position: relative; min-width: 0; min-height: 0; border: 1px solid #29363b; background: linear-gradient(to top, var(--activation, #1a2529) 0%, var(--activation, #1a2529) var(--charge, 0%), #1a2529 var(--charge, 0%), #1a2529 100%); border-radius: 2px; transition: background .12s, border-color .12s, transform .12s; }
+.cell:hover { z-index: 2; transform: scale(1.7); border-color: var(--ink); }
+.cell.fire { background: var(--hot); border-color: #ffd08c; box-shadow: 0 0 12px #f06b4f99; }
+.cell.has-input { border-top: 3px solid var(--accent); }
+.cell.output { border-bottom-color: var(--cool); }
+.axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 7px; }
+.controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 18px; align-content: start; margin-top: 18px; }
+.control-group { display: grid; gap: 10px; }
+.actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.actions button { padding: 10px 8px; }
+.primary { background: var(--accent); color: #18140b; border-color: var(--accent); font-weight: 700; }
+.readout { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.readout div { padding: 10px; background: #11191d; border: 1px solid var(--line); border-radius: 5px; }
+.readout strong { display: block; font-size: 22px; color: var(--accent); }
+.readout span { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+#gene-panel { min-height: 136px; padding: 14px; background: #11191d; border: 1px solid var(--line); border-radius: 5px; }
+.gene-title { color: var(--accent); font-weight: 700; margin-bottom: 8px; }
+.gene-line { display: flex; justify-content: space-between; color: var(--muted); border-bottom: 1px solid #263238; padding: 3px 0; }
+.gene-line b { color: var(--ink); font-weight: 500; }
+.gene-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.gene-edit label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
+.gene-edit input, .gene-edit select { width: 100%; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 5px; }
+.gene-edit button { grid-column: 1 / -1; padding: 7px; }
+.legend { display: flex; gap: 14px; color: var(--muted); font-size: 11px; }
+.dot { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; background: var(--hot); }
+.dot.input { background: var(--accent); }
+.dot.output { background: var(--cool); }
+@media (max-width: 850px) { header { display: block; } .status { text-align: left; margin-top: 12px; } .controls { grid-template-columns: 1fr; } #grid { aspect-ratio: 1.5 / 1; } }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div><div class="kicker">single chunk / cpu clock</div><h1>Chunk observatory</h1></div>
+    <div class="status"><span id="connection">connecting</span><br><span id="shape"></span></div>
+  </header>
+  <div class="layout">
+    <section class="panel stage">
+      <div class="stage-head"><div><div class="label">Neuron field</div><div>North at top · south exits at bottom</div></div><div class="legend"><span><i class="dot"></i>fire</span><span><i class="dot input"></i>input</span><span><i class="dot output"></i>output</span></div></div>
+      <div class="edge-label"><span>Input edge · click to send a 4-bit pulse</span><span id="input-value">0 active</span></div>
+      <div id="input-row" class="edge-row" aria-label="Input edge"></div>
+      <div class="grid-wrap"><div id="grid" aria-label="Neuron grid"></div><svg id="fire-arrows" class="fire-arrows" aria-hidden="true" viewBox="0 0 100 100" preserveAspectRatio="none"><defs><marker id="arrow-head" markerWidth="3.5" markerHeight="3.5" refX="3" refY="1.75" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L3.5,1.75 L0,3.5 Z" fill="#9bd6c9"></path></marker></defs></svg></div>
+      <div class="edge-label"><span>Output edge · south fires</span><span id="output-value">0 active</span></div>
+      <div id="output-row" class="edge-row" aria-label="Output edge"></div>
+      <div class="edge-label"><span>Wanted outcome · click to toggle target bits</span><span id="wanted-value">0 active</span></div>
+      <div id="wanted-row" class="edge-row" aria-label="Wanted outcome"></div>
+    </section>
+    <aside class="panel controls">
+      <div class="control-group"><div class="control-head"><div class="label">Clock</div><strong id="step">0</strong></div><div class="actions"><button class="primary" id="step-button">Step</button><button id="evolve-button">Evolve</button><button id="reset-button">Reset</button></div><label><input id="realtime" type="checkbox"> realtime</label><label><span class="label">rate <output id="rate-value">8</output> Hz</span><input id="rate" type="range" min="1" max="30" value="8"></label><div class="readout"><div><strong id="generation">0</strong><span>generation</span></div><div><strong id="fitness">0</strong><span>best fitness</span></div><div><strong id="false-positives">0</strong><span>false positives</span></div><div><strong id="misses">0</strong><span>misses</span></div></div></div>
+      <div class="control-group"><div class="label">Evolution settings</div><label><span class="label">mutation rate <output id="mutation-value">4</output>%</span><input id="mutation" type="range" min="0" max="100" value="4"></label><div class="label">Stored for the trainer; inactive in this single-chunk run.</div><button id="clear-input">Clear input</button></div>
+      <div class="control-group"><div class="label">Selected gene</div><div id="gene-panel">Hover a cell to inspect its routing gene.</div></div>
+    </aside>
+  </div>
+</main>
+<script>
+const $ = (selector) => document.querySelector(selector);
+let state = null;
+let timer = null;
+let selectedGene = null;
+
+async function request(path, options = {}) {
+  const response = await fetch(path, options);
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+function bits(value, width) { return value.toString(2).padStart(width, '0'); }
+function render(next) {
+  state = next;
+  document.documentElement.style.setProperty('--xs', state.xs);
+  $('#connection').textContent = 'live / cpu model';
+  $('#shape').textContent = `${state.xs} columns × ${state.ys} rows`;
+  $('#step').textContent = state.step;
+  $('#generation').textContent = state.generation;
+  $('#fitness').textContent = state.fitness;
+  $('#false-positives').textContent = state.false_positives;
+  $('#misses').textContent = state.misses;
+  $('#mutation').value = Math.round(state.mutation_rate * 100);
+  $('#mutation-value').textContent = Math.round(state.mutation_rate * 100);
+  const grid = $('#grid');
+  grid.style.gridTemplateColumns = `repeat(${state.xs}, minmax(0, 1fr))`;
+  grid.replaceChildren();
+  state.fire.forEach((fire, index) => {
+    const cell = document.createElement('button');
+    const x = index % state.xs;
+    const y = Math.floor(index / state.xs);
+    const threshold = state.thresh[index];
+    const charge = threshold ? Math.min(100, (state.accu[index] / threshold) * 100) : 0;
+    cell.className = 'cell' + (fire ? ' fire' : '') + (state.input[x] && y === 0 ? ' has-input' : '') + (y === state.ys - 1 ? ' output' : '');
+    cell.style.setProperty('--charge', `${charge}%`);
+    cell.style.setProperty('--activation', charge >= 100 ? '#f2b84b' : '#69a99e');
+    cell.title = geneTooltip(index, x, y, fire);
+    cell.addEventListener('click', () => showGene(index));
+    cell.addEventListener('focus', () => showGene(index));
+    grid.appendChild(cell);
+  });
+  renderFireArrows();
+  renderEdge('input-row', state.input, 'input', setInput);
+  renderEdge('output-row', state.output, 'output', null);
+  renderEdge('wanted-row', state.wanted, 'wanted', setWanted);
+}
+function renderFireArrows() {
+  const svg = $('#fire-arrows');
+  svg.querySelectorAll('.fire-arrow').forEach((arrow) => arrow.remove());
+  const directions = [
+    [0, -1], // bit 0: north
+    [1, 0],  // bit 1: east
+    [0, 1],  // bit 2: south
+    [-1, 0]  // bit 3: west
+  ];
+  state.fire.forEach((fire, index) => {
+    const x = index % state.xs;
+    const y = Math.floor(index / state.xs);
+    for (let bit = 0; bit < directions.length; bit++) {
+      if (!(fire & (1 << bit))) continue;
+      const [dx, dy] = directions[bit];
+      const targetX = x + dx;
+      const targetY = y + dy;
+      if (targetX < 0 || targetX >= state.xs || targetY < 0 || targetY >= state.ys) continue;
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.classList.add('fire-arrow');
+      line.setAttribute('x1', ((x + .5) / state.xs) * 100);
+      line.setAttribute('y1', ((y + .5) / state.ys) * 100);
+      line.setAttribute('x2', ((targetX + .5) / state.xs) * 100);
+      line.setAttribute('y2', ((targetY + .5) / state.ys) * 100);
+      line.setAttribute('marker-end', 'url(#arrow-head)');
+      svg.appendChild(line);
+    }
+  });
+}
+function geneTooltip(index, x, y, fire) {
+  const threshold = [1, 3, 5, 7][state.sens[index]];
+  return `Neuron ${index} (${x}, ${y})\n` +
+    `mask N E S W: ${bits(state.mask[index], 4)}\n` +
+    `sensitivity: ${state.sens[index]} / threshold ${threshold}\n` +
+    `activation: ${state.accu[index]} / ${threshold}\n` +
+    `fire N E S W: ${bits(fire, 4)}`;
+}
+function showGene(index) {
+  selectedGene = index;
+  const x = index % state.xs;
+  const y = Math.floor(index / state.xs);
+  const fire = bits(state.fire[index], 4);
+  $('#gene-panel').innerHTML = `<div class="gene-title">Neuron ${index} · (${x}, ${y})</div><div class="gene-line"><span>mask / N E S W</span><b>${bits(state.mask[index], 4)}</b></div><div class="gene-line"><span>sensitivity</span><b>${state.sens[index]} / threshold ${state.thresh[index]}</b></div><div class="gene-line"><span>activation</span><b>${state.accu[index]} / ${state.thresh[index]}</b></div><div class="gene-line"><span>fire pulse / N E S W</span><b>${fire}</b></div><div class="gene-edit"><label>mask (0-15)<input id="gene-mask" type="number" min="0" max="15" value="${state.mask[index]}"></label><label>sensitivity<select id="gene-sens"><option value="0">0 / 1</option><option value="1">1 / 3</option><option value="2">2 / 5</option><option value="3">3 / 7</option></select></label><button id="apply-gene">Apply gene</button></div>`;
+  $('#gene-sens').value = state.sens[index];
+  $('#apply-gene').addEventListener('click', applySelectedGene);
+}
+async function applySelectedGene() {
+  if (selectedGene === null) return;
+  const mask = Math.max(0, Math.min(15, Number($('#gene-mask').value)));
+  const sens = Number($('#gene-sens').value);
+  try { render(await request(`/api/gene?index=${selectedGene}&mask=${mask}&sens=${sens}`, {method: 'POST'})); showGene(selectedGene); }
+  catch (error) { $('#connection').textContent = error.message; }
+}
+function renderEdge(id, values, kind, setter) {
+  const row = $(`#${id}`);
+  row.replaceChildren();
+  let active = 0;
+  values.forEach((value, index) => {
+    const button = document.createElement('button');
+    if (value) active++;
+    button.className = 'edge-bit' + (value ? ` ${kind === 'output' ? 'output-on' : 'on'}` : '');
+    button.textContent = value ? '1' : '0';
+    button.title = `${kind} ${index}: ${value}`;
+    if (setter) button.addEventListener('click', () => setter(index, value ? 0 : 1));
+    row.appendChild(button);
+  });
+  $(`#${kind}-value`).textContent = `${active} active`;
+}
+async function setInput(index, value) {
+  try { render(await request(`/api/input?index=${index}&value=${value}`, {method: 'POST'})); }
+  catch (error) { $('#connection').textContent = error.message; }
+}
+async function setWanted(index, value) {
+  try { render(await request(`/api/wanted?index=${index}&value=${value}`, {method: 'POST'})); }
+  catch (error) { $('#connection').textContent = error.message; }
+}
+async function step() {
+  try { render(await request('/api/step', {method: 'POST'})); }
+  catch (error) { $('#connection').textContent = error.message; }
+}
+function restartTimer() {
+  clearInterval(timer);
+  timer = $('#realtime').checked ? setInterval(step, 1000 / Number($('#rate').value)) : null;
+}
+$('#step-button').addEventListener('click', step);
+$('#evolve-button').addEventListener('click', async () => {
+  const button = $('#evolve-button');
+  button.disabled = true;
+  button.textContent = 'Searching...';
+  try { render(await request('/api/evolve', {method: 'POST'})); }
+  catch (error) { $('#connection').textContent = error.message; }
+  button.disabled = false;
+  button.textContent = 'Evolve';
+});
+$('#reset-button').addEventListener('click', async () => render(await request('/api/reset', {method: 'POST'})));
+$('#clear-input').addEventListener('click', async () => { for (let index = 0; index < state.xs; index++) await setInput(index, 0); });
+$('#realtime').addEventListener('change', restartTimer);
+$('#rate').addEventListener('input', () => { $('#rate-value').textContent = $('#rate').value; restartTimer(); });
+$('#mutation').addEventListener('input', () => { $('#mutation-value').textContent = $('#mutation').value; });
+$('#mutation').addEventListener('change', async () => {
+  try { render(await request(`/api/mutation?value=${Number($('#mutation').value) / 100}`, {method: 'POST'})); }
+  catch (error) { $('#connection').textContent = error.message; }
+});
+request('/api/state').then(render).catch(error => { $('#connection').textContent = error.message; });
+</script>
+</body>
+</html>
