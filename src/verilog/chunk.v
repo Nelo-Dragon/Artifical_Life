@@ -15,26 +15,51 @@ module chunk #(
     localparam N = XS * YS;
 
     wire [3:0] neuron_out [0:N-1];
-    reg [3:0] neuron_in [0:N-1];
+    wire [3:0] neuron_in [0:N-1];
+    wire [3:0] input_term [0:N-1];
+    wire [3:0] north_term [0:N-1];
+    wire [3:0] south_term [0:N-1];
+    wire [3:0] east_term [0:N-1];
+    wire [3:0] west_term [0:N-1];
 
-    integer target;
     integer output_x;
-    
-    always_comb begin
-
-        for (target = 0; target < N; target = target + 1) begin
-            // Bit 0: north, bit 1: east, bit 2: south, bit 3: west.
-            neuron_in[target] = (target < XS ? in[target] : 4'd0)
-                + (target >= XS && neuron_out[target - XS][2] ? 4'd1 : 4'd0)
-                + (target < N - XS && neuron_out[target + XS][0] ? 4'd1 : 4'd0)
-                + (target % XS > 0 && neuron_out[target - 1][1] ? 4'd1 : 4'd0)
-                + (target % XS < XS - 1 && neuron_out[target + 1][3] ? 4'd1 : 4'd0);
-        end
-    end
 
     genvar i;
 
     generate
+
+        for (i = 0; i < N; i = i + 1) begin : gen_inputs
+
+            if (i < XS) begin : gen_input
+                assign input_term[i] = in[i];
+            end else begin : gen_no_input
+                assign input_term[i] = 4'd0;
+            end
+
+            if (i >= XS) begin : gen_north
+                assign north_term[i] = neuron_out[i - XS][2] ? 4'd1 : 4'd0;
+            end else begin : gen_no_north
+                assign north_term[i] = 4'd0;
+            end
+            if (i < N - XS) begin : gen_south
+                assign south_term[i] = neuron_out[i + XS][0] ? 4'd1 : 4'd0;
+            end else begin : gen_no_south
+                assign south_term[i] = 4'd0;
+            end
+            if ((i % XS) > 0) begin : gen_west
+                assign west_term[i] = neuron_out[i - 1][1] ? 4'd1 : 4'd0;
+            end else begin : gen_no_west
+                assign west_term[i] = 4'd0;
+            end
+            if ((i % XS) < XS - 1) begin : gen_east
+                assign east_term[i] = neuron_out[i + 1][3] ? 4'd1 : 4'd0;
+            end else begin : gen_no_east
+                assign east_term[i] = 4'd0;
+            end
+
+            assign neuron_in[i] = input_term[i] + north_term[i] + south_term[i]
+                + east_term[i] + west_term[i];
+        end
 
         for (i = 0; i < N; i = i + 1) begin : gen_neurons
 
@@ -51,7 +76,7 @@ module chunk #(
         end
     endgenerate
 
-    always_comb begin
+    always @(*) begin
         for (output_x = 0; output_x < XS; output_x = output_x + 1)
             out[output_x] = neuron_out[(YS - 1) * XS + output_x][2];
     end

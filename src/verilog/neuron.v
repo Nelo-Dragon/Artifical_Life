@@ -38,7 +38,7 @@ module neuron (
                 refa <= 1'b0;
                 out_fire <= 4'b0000;
             end
-            else if (accu_sum > {2'b00, thresh}) begin
+            else if (accu_sum >= {2'b00, thresh}) begin
 
                 out_fire <= mask;
                 accu <= 3'b000;
