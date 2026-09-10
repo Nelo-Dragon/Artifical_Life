@@ -362,8 +362,8 @@ int main(int argc, char** argv) {
     std::vector<CudaGenome> population(POPULATION_SIZE);
     for (auto& genome : population)
         genome = randomGenome(random);
-    // Seed the reachable south-channel solution. Without this, the fitness
-    // signal cannot guide discovery of a full 16-neuron propagation chain.
+    // Preserve a working propagation scaffold so arithmetic evolution starts
+    // with signal-carrying genomes rather than an all-zero-output population.
     population[0] = directSouthGenome();
     CudaTrainingContext* context = createCudaTrainingContext(population);
 
