@@ -135,6 +135,17 @@ CudaGenome randomGenome(std::mt19937& random) {
     return genome;
 }
 
+CudaGenome directSouthGenome() {
+    CudaGenome genome{};
+    for (int index = 0; index < CUDA_NEURON_COUNT; ++index) {
+        genome.masks[index] = 0b0100;
+        genome.sensitivities[index] = 0;
+    }
+    for (auto& input : genome.inputs)
+        input = 15;
+    return genome;
+}
+
 void mutate(CudaGenome& genome, std::mt19937& random) {
     std::bernoulli_distribution mutateMask(MUTATION_RATE);
     std::bernoulli_distribution mutateSensitivity(std::min(1.0, MUTATION_RATE * 1.5));
@@ -351,6 +362,9 @@ int main(int argc, char** argv) {
     std::vector<CudaGenome> population(POPULATION_SIZE);
     for (auto& genome : population)
         genome = randomGenome(random);
+    // Seed the reachable south-channel solution. Without this, the fitness
+    // signal cannot guide discovery of a full 16-neuron propagation chain.
+    population[0] = directSouthGenome();
     CudaTrainingContext* context = createCudaTrainingContext(population);
 
     for (std::size_t index = 0; index < targets.size(); ++index) {

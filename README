@@ -179,7 +179,14 @@ Build only with `make`; run the generated trainer directly with:
 ./obj_dir/run_sim wanted_outputs.txt
 ```
 
-`src/train_help.py` regenerates `wanted_outputs.txt` with 8-bit training pairs.
+`src/train_help.py` regenerates `wanted_outputs.txt` with learnable identity
+patterns. It orders patterns from zero bits, through one-bit patterns, to
+increasingly complex combinations so training receives a useful curriculum:
+
+```sh
+python3 src/train_help.py --width 16 --repeats 1
+```
+
 The file describes desired input/output patterns; it does not add an input
 interpreter or make the Verilog chunk perform binary arithmetic by itself.
 
