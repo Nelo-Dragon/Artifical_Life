@@ -18,14 +18,28 @@ language learner, or an FPGA implementation.
 | Per-neuron mask and sensitivity editing | Implemented |
 | Small mutation search in the browser | Implemented |
 | Population-based training in `src/main.cpp` | Implemented, separate from the browser server |
-| `in_chunk` input interpreter | **NOT COMPLETED** |
-| `out_chunk` output interpreter | **NOT COMPLETED** |
-| Multiple connected chunks / `C_LINK` | **NOT COMPLETED** |
-| FPGA synthesis and hardware validation | **NOT COMPLETED** |
-| ASCII or language learning | **NOT COMPLETED** |
+| `in_chunk` input interpreter | Implemented |
+| `out_chunk` output interpreter | Implemented |
+| Multiple connected chunks / `C_LINK` | Link primitive implemented |
+| FPGA synthesis and hardware validation | Lint/synthesis targets implemented |
+| ASCII byte-stream transport | Implemented by the stream adapters |
+| Language learning objective/trainer | **NOT COMPLETED** |
 
-The `in_chunk` and `out_chunk` names are reserved for the future I/O regions.
-There are currently no Verilog modules or simulator paths with those names.
+`in_chunk`, `out_chunk`, `c_link`, and `c_link_bank` are implemented in
+`src/verilog/chunk.v`. They use an explicitly clocked valid protocol and
+preserve the existing chunk input convention: a set bit is represented by a
+full-strength pulse (`4'hf` at the chunk boundary).
+
+The same file includes `memory_region`, `cortex_region`, and `output_region`.
+These provide a synchronous byte-memory boundary, a clocked cortex byte
+stream, and selectable memory-versus-final-output routing. They are separate
+from the existing `chunk` module so current Verilator and CUDA behavior remains
+unchanged.
+
+`cognitive_pipeline` wires those three regions into a small byte-stream
+proof-of-concept. Set `to_memory` to write cortex bytes at `write_address`;
+set it low to emit cortex bytes directly, or assert `read_valid` to emit a
+previously stored byte from `read_address`.
 
 ## What Is Implemented
 
@@ -142,6 +156,11 @@ loading of `wanted_outputs.txt`. The default CUDA build is `16x16`; override
 the dimensions with `CUDA_XS` and `CUDA_YS` (the shipped `wanted_outputs.txt`
 uses 16-bit patterns).
 
+The CUDA fitness API also exposes `setCudaByteInput()` and
+`cudaEvaluationByteOutput()` for byte-stream adapters. They use the low eight
+input/output bits and preserve the same bit ordering as `in_chunk` and
+`out_chunk`.
+
 The dashboard defaults to `4x8`; override its build dimensions with:
 
 ```sh
@@ -209,23 +228,38 @@ The server exposes these endpoints on port `8080`:
 
 ## Planned Regions
 
-### `in_chunk` — **NOT COMPLETED**
+### `in_chunk`
 
-This planned region would convert an external stream, such as binary or ASCII,
-into pulses for a processing chunk. No module, protocol, buffering behavior,
-or training behavior has been implemented yet.
+`in_chunk` accepts one byte when `data_valid && data_ready` and emits its
+eight bits least-significant-bit first as eight valid pulse cycles. This is
+binary-safe and therefore ASCII-compatible; framing and higher-level token
+semantics remain outside the chunk.
 
-### `out_chunk` — **NOT COMPLETED**
+### `out_chunk`
 
-This planned region would collect processing pulses and convert them back into
-an external stream, such as binary or ASCII. No module, protocol, buffering
-behavior, or training behavior has been implemented yet.
+`out_chunk` samples eight valid pulse cycles and emits one byte with a
+one-cycle `data_valid` indication. It uses the same least-significant-bit
+first convention as `in_chunk`.
 
-### Connected regional chunks — **NOT COMPLETED**
+### Connected regional chunks
 
-Future work may add memory, processing, and I/O regions connected by explicit
-long-range links. The current `chunk` only routes to immediate neighbors
-inside one grid.
+`c_link` connects one source pulse bus to one destination pulse bus, and
+`c_link_bank` provides a parameterized set of sparse links. These are
+interconnect primitives; a system-level multi-chunk wrapper still needs to
+instantiate the chunks and define its link table.
+
+### FPGA validation
+
+`make fpga-lint` runs Verilator lint over the chunk and adapter modules.
+`make fpga-synth` runs Yosys synthesis when Yosys is installed:
+
+```sh
+sudo apt install yosys
+make fpga-lint
+make fpga-synth
+```
+
+The repository does not claim a place-and-route result for a specific FPGA.
 
 ## Scope And Caveats
 
@@ -233,5 +267,6 @@ The project is best described today as an evolvable cellular automaton with
 sparse local pulse routing. The FPGA capacity figures and biological
 comparisons that were previously in this file were design notes, not measured
 results, so they are intentionally not presented as capabilities of the
-current implementation. No FPGA synthesis, place-and-route result, language
-learning result, or multi-chunk result is claimed here.
+current implementation. No language-learning result or complete multi-chunk
+system is claimed here; the available link and byte-stream primitives are
+validated by Verilator lint.

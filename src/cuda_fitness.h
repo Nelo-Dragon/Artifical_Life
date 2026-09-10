@@ -54,8 +54,10 @@ CudaTrainingContext* createCudaTrainingContext(
     const std::vector<CudaGenome>& initialPopulation);
 void destroyCudaTrainingContext(CudaTrainingContext* context);
 void setCudaTrainingInput(CudaTrainingContext* context, std::uint64_t input);
+void setCudaByteInput(CudaTrainingContext* context, std::uint8_t byte);
 CudaEvaluation stepCudaTraining(CudaTrainingContext* context,
                                 std::uint64_t wantedOutput);
+std::uint8_t cudaEvaluationByteOutput(const CudaEvaluation& evaluation);
 void downloadCudaPopulation(CudaTrainingContext* context,
                             std::vector<CudaGenome>& population);
 void downloadCudaBestGenome(CudaTrainingContext* context, CudaGenome& genome);

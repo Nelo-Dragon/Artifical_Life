@@ -79,7 +79,7 @@ TRAIN_VERILATOR_FLAGS = -Wall --cc \
 				  -CFLAGS "-DSIM_XS=$(TRAIN_XS) -DSIM_YS=$(TRAIN_YS)" \
 				  -o $(TRAIN_TARGET)
 
-.PHONY: all run sim sim-build train train-build clean cuda cuda-train cuda-train-server
+.PHONY: all run sim sim-build train train-build clean cuda cuda-train cuda-train-server fpga-lint fpga-synth
 
 all:
 	$(VERILATOR) $(VERILATOR_FLAGS)
@@ -116,3 +116,10 @@ cuda-train-server:
 	mkdir -p $(BUILD_DIR)
 	$(NVCC) $(CUDA_FLAGS) $(CUDA_DIMENSIONS) -ccbin=$(CUDA_HOST_COMPILER) -std=c++17 -O3 -arch=$(CUDA_ARCH) -Isrc \
 		-DUSE_CUDA -x cu src/cuda_fitness.cu src/trainer_server.cpp -o $(BUILD_DIR)/cuda_trainer_server
+
+fpga-lint:
+	verilator --lint-only -Wall $(VERILOG_SRCS) --top-module chunk \
+		-GXS=$(MAIN_XS) -GYS=$(MAIN_YS) -I$(SRC_DIR)
+
+fpga-synth:
+	yosys -p "read_verilog -sv $(VERILOG_SRCS); synth -top chunk"

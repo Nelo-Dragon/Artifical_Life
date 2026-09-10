@@ -367,6 +367,10 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
         checkCuda(cudaDeviceSynchronize(), "set training input synchronize");
     }
 
+    void setCudaByteInput(CudaTrainingContext* context, std::uint8_t byte) {
+        setCudaTrainingInput(context, static_cast<std::uint64_t>(byte));
+    }
+
     CudaEvaluation stepCudaTraining(CudaTrainingContext* context,
                                     std::uint64_t wantedOutput) {
         const int blocks = (context->populationSize + TRAIN_THREADS - 1) / TRAIN_THREADS;
@@ -407,6 +411,10 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
         std::swap(context->current, context->next);
         context->evaluatedPopulation = context->next;
         return best;
+    }
+
+    std::uint8_t cudaEvaluationByteOutput(const CudaEvaluation& evaluation) {
+        return static_cast<std::uint8_t>(evaluation.output & 0xffu);
     }
 
     void downloadCudaPopulation(CudaTrainingContext* context,
