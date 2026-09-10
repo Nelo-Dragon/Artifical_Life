@@ -9,9 +9,20 @@
 #include <string>
 #include <vector>
 
-constexpr std::size_t POPULATION_SIZE = 256;
-constexpr std::size_t ELITE_COUNT = POPULATION_SIZE / 5;
-constexpr double MUTATION_RATE = 0.04;
+#ifndef CUDA_POPULATION_SIZE
+#define CUDA_POPULATION_SIZE 32768
+#endif
+#ifndef CUDA_MUTATION_RATE
+#define CUDA_MUTATION_RATE 0.04
+#endif
+#ifndef CUDA_ELITE_PERCENT
+#define CUDA_ELITE_PERCENT 20
+#endif
+constexpr std::size_t POPULATION_SIZE = CUDA_POPULATION_SIZE;
+constexpr std::size_t ELITE_COUNT = std::max<std::size_t>(
+    1, POPULATION_SIZE * CUDA_ELITE_PERCENT / 100);
+constexpr double MUTATION_RATE = CUDA_MUTATION_RATE;
+constexpr std::size_t PLATEAU_GENERATIONS = 150;
 
 struct Target {
     std::uint64_t input;
@@ -47,6 +58,21 @@ bool parseBits(const std::string& text, std::uint64_t& value) {
     }
     value = std::bitset<CUDA_XS>(bits).to_ullong();
     return true;
+}
+
+std::uint64_t reverseBits(std::uint64_t value) {
+    std::uint64_t reversed = 0;
+    for (int index = 0; index < CUDA_XS; ++index)
+        reversed |= ((value >> index) & 1) << (CUDA_XS - 1 - index);
+    return reversed;
+}
+
+std::string gridBits(std::uint64_t value) {
+    std::string result;
+    result.reserve(CUDA_XS);
+    for (int index = 0; index < CUDA_XS; ++index)
+        result += ((value >> index) & 1) ? '1' : '0';
+    return result;
 }
 
 bool loadTargets(const std::string& path, std::vector<Target>& targets) {
@@ -93,6 +119,9 @@ bool loadTargets(const std::string& path, std::vector<Target>& targets) {
                       << ": expected " << CUDA_XS << " bits\n";
             return false;
         }
+        // Map the file's leftmost output bit to physical grid column 0,
+        // matching the input mapping and the CPU trainer.
+        target.output = reverseBits(target.output);
         targets.push_back(target);
     }
     return !targets.empty();
@@ -168,15 +197,19 @@ std::vector<RankedGenome> rankPopulation(const std::vector<CudaGenome>& populati
 }
 
 std::vector<CudaGenome> evolve(std::vector<CudaGenome> population,
+                               std::uint64_t input,
                                std::uint64_t wantedOutput,
-                               std::mt19937& random) {
+                               std::mt19937& random,
+                               std::size_t targetIndex) {
     std::uniform_int_distribution<std::size_t> parent(0, ELITE_COUNT - 1);
     std::size_t generation = 0;
+    std::size_t stagnantGenerations = 0;
+    float bestRankingFitness = -1.0f;
     while (true) {
         const auto ranked = rankPopulation(population, wantedOutput);
-        std::cout << "Generation " << generation
-                  << " | best fitness: " << ranked.front().fitness
-                  << "/" << CUDA_XS << "\n";
+        const std::uint64_t error = ranked.front().output ^ wantedOutput;
+        std::cout << (targetIndex + 1) << " : " << generation
+                  << " | " << gridBits(error) << "\n";
         if (ranked.front().fitness == CUDA_XS) {
             population.clear();
             for (const auto& item : ranked)
@@ -184,12 +217,31 @@ std::vector<CudaGenome> evolve(std::vector<CudaGenome> population,
             return population;
         }
 
+        if (ranked.front().rankingFitness > bestRankingFitness) {
+            bestRankingFitness = ranked.front().rankingFitness;
+            stagnantGenerations = 0;
+        } else {
+            ++stagnantGenerations;
+        }
+        if (stagnantGenerations >= PLATEAU_GENERATIONS) {
+            population.clear();
+            population.push_back(ranked.front().genome);
+            while (population.size() < POPULATION_SIZE) {
+                CudaGenome genome = randomGenome(random);
+                setInput(genome, input);
+                population.push_back(genome);
+            }
+            stagnantGenerations = 0;
+            continue;
+        }
+
         population.clear();
         for (std::size_t index = 0; index < ELITE_COUNT; ++index)
             population.push_back(ranked[index].genome);
         while (population.size() < POPULATION_SIZE) {
-            CudaGenome child = crossover(ranked[parent(random)].genome,
-                                          ranked[parent(random)].genome, random);
+            const auto& firstParent = ranked[parent(random)].genome;
+            const auto& secondParent = ranked[parent(random)].genome;
+            CudaGenome child = crossover(firstParent, secondParent, random);
             mutate(child, random);
             population.push_back(child);
         }
@@ -216,7 +268,8 @@ int main(int argc, char** argv) {
         std::cout << "Target " << index + 1 << "/" << targets.size()
                   << " | input: " << targets[index].inputBits
                   << " | wanted output: " << targets[index].outputBits << "\n";
-        population = evolve(std::move(population), targets[index].output, random);
+        population = evolve(std::move(population), targets[index].input,
+                            targets[index].output, random, index);
     }
 
     std::cout << "Completed CUDA training for " << targets.size() << " targets.\n";

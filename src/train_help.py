@@ -1,8 +1,8 @@
 from pathlib import Path
 
 
-XS = 8
-YS = 8
+XS = 16
+YS = 16
 REPEATS = 4
 OUTPUT_FILE = Path("wanted_outputs.txt")
 

@@ -26,6 +26,9 @@ struct CudaEvaluation {
     float rankingFitness = 0.0f;
     float tiebreaker = 0.0f;
     std::uint64_t output = 0;
+    std::uint8_t fire[CUDA_NEURON_COUNT]{};
+    std::uint8_t accu[CUDA_NEURON_COUNT]{};
+    std::uint8_t thresh[CUDA_NEURON_COUNT]{};
 };
 
 void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,

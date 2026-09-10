@@ -28,14 +28,22 @@ SIM_XS ?= 4
 SIM_YS ?= 8
 TRAIN_XS ?= 4
 TRAIN_YS ?= 8
-CUDA_ARCH ?= sm_75
+CUDA_ARCH ?= sm_89
 CUDA_HOME ?= /usr/local/cuda-13.3
 NVCC ?= $(CUDA_HOME)/bin/nvcc
 CUDA_HOST_COMPILER ?= gcc
 CUDA_FLAGS ?= -allow-unsupported-compiler
-CUDA_XS ?= 4
-CUDA_YS ?= 4
-CUDA_DIMENSIONS = -DTRAIN_XS=$(CUDA_XS) -DTRAIN_YS=$(CUDA_YS)
+CUDA_XS ?= 16
+CUDA_YS ?= 16
+CUDA_POPULATION_SIZE ?= 32768
+CUDA_MUTATION_RATE ?= 0.04
+CUDA_SIMULATION_CYCLES ?= 32
+CUDA_ELITE_PERCENT ?= 20
+CUDA_DIMENSIONS = -DTRAIN_XS=$(CUDA_XS) -DTRAIN_YS=$(CUDA_YS) \
+	-DCUDA_POPULATION_SIZE=$(CUDA_POPULATION_SIZE) \
+	-DCUDA_MUTATION_RATE=$(CUDA_MUTATION_RATE) \
+	-DCUDA_SIMULATION_CYCLES=$(CUDA_SIMULATION_CYCLES) \
+	-DCUDA_ELITE_PERCENT=$(CUDA_ELITE_PERCENT)
 
 # Verilator Flags
 # -I$(SRC_DIR) tells Verilator where to search for included files
@@ -71,7 +79,7 @@ TRAIN_VERILATOR_FLAGS = -Wall --cc \
 				  -CFLAGS "-DSIM_XS=$(TRAIN_XS) -DSIM_YS=$(TRAIN_YS)" \
 				  -o $(TRAIN_TARGET)
 
-.PHONY: all run sim sim-build train train-build clean cuda cuda-train
+.PHONY: all run sim sim-build train train-build clean cuda cuda-train cuda-train-server
 
 all:
 	$(VERILATOR) $(VERILATOR_FLAGS)
@@ -103,3 +111,8 @@ cuda-train:
 	mkdir -p $(BUILD_DIR)
 	$(NVCC) $(CUDA_FLAGS) $(CUDA_DIMENSIONS) -ccbin=$(CUDA_HOST_COMPILER) -std=c++17 -O3 -arch=$(CUDA_ARCH) -Isrc \
 		src/cuda_fitness.cu src/cuda_train.cu -o $(BUILD_DIR)/cuda_train
+
+cuda-train-server:
+	mkdir -p $(BUILD_DIR)
+	$(NVCC) $(CUDA_FLAGS) $(CUDA_DIMENSIONS) -ccbin=$(CUDA_HOST_COMPILER) -std=c++17 -O3 -arch=$(CUDA_ARCH) -Isrc \
+		-DUSE_CUDA -x cu src/cuda_fitness.cu src/trainer_server.cpp -o $(BUILD_DIR)/cuda_trainer_server

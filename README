@@ -117,10 +117,30 @@ generation. It is separate from the single-chunk observatory:
 make train
 ```
 
-Open [http://localhost:8081](http://localhost:8081). **Next generation**
-evaluates 256 genomes, keeps the best 20% as elites, mutates children, and
-shows the best current chunk. Enable **realtime** to advance generations
-automatically. Use `make train-build` when you only want to compile it.
+Open [http://localhost:8081](http://localhost:8081). The server trains
+continuously in the background: it evaluates 256 genomes per generation,
+keeps the best 20% as elites, mutates children, and the dashboard polls
+`/api/state` every 250ms to show the current best chunk live. When
+`wanted_outputs.txt` exists at the repository root and its bit width matches
+the build's `XS`, the trainer loads it and automatically cycles to the next
+pattern once the current one reaches a perfect score, re-seeding the
+population for each new target (mirroring `src/main.cpp`). If the file is
+missing or its width does not match, the trainer falls back to a single
+interactive target that can be changed with the `POST /api/input` and
+`POST /api/wanted` endpoints. Use `make train-build` when you only want to
+compile it.
+
+A CUDA-backed trainer server is also available for the GPU evaluator:
+
+```sh
+make cuda-train-server
+```
+
+This builds the same dashboard endpoint against `src/cuda_fitness.cu` and runs
+it on port `8081` with the same browser API contract, including automatic
+loading of `wanted_outputs.txt`. The default CUDA build is `16x16`; override
+the dimensions with `CUDA_XS` and `CUDA_YS` (the shipped `wanted_outputs.txt`
+uses 16-bit patterns).
 
 The dashboard defaults to `4x8`; override its build dimensions with:
 

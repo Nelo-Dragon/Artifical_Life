@@ -9,7 +9,10 @@
 
 namespace {
 
-constexpr int SIMULATION_CYCLES = 64;
+#ifndef CUDA_SIMULATION_CYCLES
+#define CUDA_SIMULATION_CYCLES 32
+#endif
+constexpr int SIMULATION_CYCLES = CUDA_SIMULATION_CYCLES;
 constexpr float MIN_FITNESS_WEIGHT = 0.6f;
 constexpr float AVERAGE_FITNESS_WEIGHT = 0.4f;
 
@@ -31,8 +34,7 @@ __global__ void evaluatePopulation(const CudaGenome* genomes,
     std::uint8_t fired[CUDA_NEURON_COUNT] = {};
     std::uint8_t nextInput[CUDA_NEURON_COUNT];
     const int warmupCycles = CUDA_YS - 1;
-    int minimumFitness = CUDA_XS;
-    int minimumError = CUDA_XS;
+    int bestFitness = -1;
     int scoredCycles = 0;
     float fitnessTotal = 0.0f;
     float tiebreakerTotal = 0.0f;
@@ -81,10 +83,9 @@ __global__ void evaluatePopulation(const CudaGenome* genomes,
         if (cycle < warmupCycles)
             continue;
 
-        const int error = __popc(static_cast<unsigned int>(
-            output ^ wantedOutput)) + __popc(static_cast<unsigned int>(
+        const int currentFitness = CUDA_XS - __popc(static_cast<unsigned int>(
+            output ^ wantedOutput)) - __popc(static_cast<unsigned int>(
             (output ^ wantedOutput) >> 32));
-        const int currentFitness = CUDA_XS - error;
         float tiebreaker = 0.0f;
         for (int x = 0; x < CUDA_XS; ++x) {
             const int index = (CUDA_YS - 1) * CUDA_XS + x;
@@ -93,10 +94,8 @@ __global__ void evaluatePopulation(const CudaGenome* genomes,
             const bool wanted = ((wantedOutput >> x) & 1) != 0;
             tiebreaker += wanted ? thresholdValue - accumulatorValue : accumulatorValue;
         }
-        if (currentFitness < minimumFitness)
-            minimumFitness = currentFitness;
-        if (error < minimumError) {
-            minimumError = error;
+        if (currentFitness > bestFitness) {
+            bestFitness = currentFitness;
             best = output;
         }
         fitnessTotal += currentFitness;
@@ -106,11 +105,16 @@ __global__ void evaluatePopulation(const CudaGenome* genomes,
 
     const float averageFitness = fitnessTotal / scoredCycles;
     evaluations[genomeIndex].fitness = static_cast<int>(
-        MIN_FITNESS_WEIGHT * minimumFitness + AVERAGE_FITNESS_WEIGHT * averageFitness);
-    evaluations[genomeIndex].rankingFitness = MIN_FITNESS_WEIGHT * minimumFitness
+        bestFitness);
+    evaluations[genomeIndex].rankingFitness = MIN_FITNESS_WEIGHT * bestFitness
         + AVERAGE_FITNESS_WEIGHT * averageFitness;
     evaluations[genomeIndex].tiebreaker = tiebreakerTotal / scoredCycles;
     evaluations[genomeIndex].output = best;
+    for (int index = 0; index < CUDA_NEURON_COUNT; ++index) {
+        evaluations[genomeIndex].fire[index] = fired[index];
+        evaluations[genomeIndex].accu[index] = accumulator[index];
+        evaluations[genomeIndex].thresh[index] = threshold(genome.sensitivities[index]);
+    }
 }
 
 void checkCuda(cudaError_t error, const char* operation) {
