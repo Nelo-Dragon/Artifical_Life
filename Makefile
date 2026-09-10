@@ -35,6 +35,13 @@ CUDA_HOST_COMPILER ?= gcc
 CUDA_FLAGS ?= -allow-unsupported-compiler
 CUDA_XS ?= 16
 CUDA_YS ?= 16
+
+VERILATOR_ROOT := $(shell $(VERILATOR) --getenv VERILATOR_ROOT)
+CURR_XS ?= 4
+CURR_YS ?= 8
+CURRICULUM_BUILD_DIR = obj_curriculum
+CURRICULUM_TARGET = curriculum_train
+CURRICULUM_CPP_SRC = $(SRC_DIR)/curriculum_train.cpp
 CUDA_POPULATION_SIZE ?= 65536
 CUDA_MUTATION_RATE ?= 0.04
 CUDA_SIMULATION_CYCLES ?= 32
@@ -79,7 +86,7 @@ TRAIN_VERILATOR_FLAGS = -Wall --cc \
 				  -CFLAGS "-DSIM_XS=$(TRAIN_XS) -DSIM_YS=$(TRAIN_YS)" \
 				  -o $(TRAIN_TARGET)
 
-.PHONY: all run sim sim-build train train-build clean cuda cuda-train cuda-train-server fpga-lint fpga-synth
+.PHONY: all run sim sim-build train train-build clean cuda cuda-train cuda-train-server curriculum curriculum-build fpga-lint fpga-synth
 
 all:
 	$(VERILATOR) $(VERILATOR_FLAGS)
@@ -101,7 +108,7 @@ train:
 	./$(TRAIN_BUILD_DIR)/$(TRAIN_TARGET)
 
 clean:
-	rm -rf $(BUILD_DIR) $(SIM_BUILD_DIR) $(TRAIN_BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(SIM_BUILD_DIR) $(TRAIN_BUILD_DIR) $(CURRICULUM_BUILD_DIR)
 
 cuda:
 	mkdir -p $(BUILD_DIR)
@@ -116,6 +123,31 @@ cuda-train-server:
 	mkdir -p $(BUILD_DIR)
 	$(NVCC) $(CUDA_FLAGS) $(CUDA_DIMENSIONS) -ccbin=$(CUDA_HOST_COMPILER) -std=c++17 -O3 -arch=$(CUDA_ARCH) -Isrc \
 		-DUSE_CUDA -x cu src/cuda_fitness.cu src/trainer_server.cpp -o $(BUILD_DIR)/cuda_trainer_server
+
+curriculum-build:
+	mkdir -p $(CURRICULUM_BUILD_DIR)/chunk $(CURRICULUM_BUILD_DIR)/pipeline
+	$(VERILATOR) -Wall --cc $(VERILOG_SRCS) --top-module chunk \
+		-GXS=$(CURR_XS) -GYS=$(CURR_YS) -I$(SRC_DIR) \
+		--Mdir $(CURRICULUM_BUILD_DIR)/chunk
+	$(MAKE) -C $(CURRICULUM_BUILD_DIR)/chunk -f Vchunk.mk Vchunk__ALL.a verilated.o verilated_threads.o
+	$(VERILATOR) -Wall --cc $(VERILOG_SRCS) --top-module pipeline \
+		-GXS=$(CURR_XS) -GYS=$(CURR_YS) -I$(SRC_DIR) \
+		--Mdir $(CURRICULUM_BUILD_DIR)/pipeline
+	$(MAKE) -C $(CURRICULUM_BUILD_DIR)/pipeline -f Vpipeline.mk Vpipeline__ALL.a
+	$(CXX) -std=c++17 -O2 -Wall \
+		-DCURR_XS=$(CURR_XS) -DCURR_YS=$(CURR_YS) \
+		-I$(VERILATOR_ROOT)/include -I$(VERILATOR_ROOT)/include/vltstd \
+		-I$(CURRICULUM_BUILD_DIR)/chunk -I$(CURRICULUM_BUILD_DIR)/pipeline \
+		$(CURRICULUM_CPP_SRC) \
+		$(CURRICULUM_BUILD_DIR)/chunk/Vchunk__ALL.a \
+		$(CURRICULUM_BUILD_DIR)/pipeline/Vpipeline__ALL.a \
+		$(CURRICULUM_BUILD_DIR)/chunk/verilated.o \
+		$(CURRICULUM_BUILD_DIR)/chunk/verilated_threads.o \
+		-lpthread -latomic \
+		-o $(CURRICULUM_BUILD_DIR)/$(CURRICULUM_TARGET)
+
+curriculum: curriculum-build
+	./$(CURRICULUM_BUILD_DIR)/$(CURRICULUM_TARGET)
 
 fpga-lint:
 	verilator --lint-only -Wall $(VERILOG_SRCS) --top-module chunk \

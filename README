@@ -20,7 +20,7 @@ language learner, or an FPGA implementation.
 | Population-based training in `src/main.cpp` | Implemented, separate from the browser server |
 | `in_chunk` input interpreter | **NOT COMPLETED** |
 | `out_chunk` output interpreter | **NOT COMPLETED** |
-| Multiple connected chunks / `C_LINK` | Link primitive implemented |
+| Multiple connected chunks / `C_LINK` | Link primitive implemented; system wrapper (`src/verilog/pipeline.v`) and staged curriculum trainer added, see `CURRICULUM.md` |
 | FPGA synthesis and hardware validation | **NOT COMPLETED** |
 | Language learning objective/trainer | **NOT COMPLETED** |
 
@@ -193,6 +193,28 @@ python3 src/train_help.py --width 16 --operand-bits 4 --repeats 4
 The file describes desired input/output patterns; it does not add an input
 interpreter or make the Verilog chunk perform binary arithmetic by itself.
 
+## Run The Staged Curriculum Trainer
+
+`make curriculum-build` compiles a CPU trainer that runs the five-stage
+curriculum described in `CURRICULUM.md`: memory chunk, then input chunk,
+then output chunk, then cortex chunk, then a joint fine-tune of all four
+genomes wired together through `src/verilog/pipeline.v` (built on `c_link`).
+Each stage's winning genome is written to `genomes/<role>.genome`; a summary
+is written to `genomes/curriculum_report.txt`.
+
+```sh
+make curriculum-build
+./obj_curriculum/curriculum_train --stage=all
+```
+
+Override the shared grid size with `CURR_XS`/`CURR_YS` (default `4x8`), and
+tune the run with flags such as `--generations`, `--trials`,
+`--pattern-count`, `--initial-silence`, `--max-silence`,
+`--joint-generations`, `--joint-trials`, `--joint-perturb`, `--jitter-density`,
+and `--jitter-drop`. `--stage=memory|input|output|cortex|joint` runs a single
+stage using previously saved genomes for the others. See `CURRICULUM.md` for
+the fitness function used at each stage and the design decisions behind it.
+
 ## HTTP API Used By The Observatory
 
 The server exposes these endpoints on port `8080`:
@@ -217,6 +239,14 @@ The server exposes these endpoints on port `8080`:
 `c_link_bank` provides a parameterized set of sparse links. These are
 interconnect primitives; a system-level multi-chunk wrapper still needs to
 instantiate the chunks and define its link table.
+
+`src/verilog/pipeline.v` is now that wrapper: it instantiates a memory,
+input, cortex, and output chunk and wires them with three `c_link`
+connections. `src/curriculum_train.cpp` trains each chunk in isolation with
+a role-appropriate fitness function, then fine-tunes all four genomes
+together through this wired pipeline. See `CURRICULUM.md` for the full
+design, the decisions made along the way, and how to run it with
+`make curriculum-build` / `./obj_curriculum/curriculum_train`.
 
 ### Emergence diagnostics
 
