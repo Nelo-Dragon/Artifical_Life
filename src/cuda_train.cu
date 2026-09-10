@@ -8,6 +8,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <limits>
 
 #ifndef CUDA_POPULATION_SIZE
 #define CUDA_POPULATION_SIZE 65536
@@ -23,6 +24,7 @@ constexpr std::size_t ELITE_COUNT = std::max<std::size_t>(
     1, POPULATION_SIZE * CUDA_ELITE_PERCENT / 100);
 constexpr double MUTATION_RATE = CUDA_MUTATION_RATE;
 constexpr std::size_t PLATEAU_GENERATIONS = 150;
+bool verbose = false;
 
 struct Target {
     std::uint64_t input;
@@ -247,7 +249,8 @@ std::vector<CudaGenome> evolve(std::vector<CudaGenome> population,
 std::vector<CudaGenome> evolveCuda(CudaTrainingContext* context,
                                    std::uint64_t input,
                                    std::uint64_t wantedOutput,
-                                   std::size_t targetIndex) {
+                                   std::size_t targetIndex,
+                                   std::size_t maxGenerations) {
     std::size_t generation = 0;
     std::size_t stagnantGenerations = 0;
     float bestRankingFitness = -1.0f;
@@ -258,7 +261,22 @@ std::vector<CudaGenome> evolveCuda(CudaTrainingContext* context,
                   << " | " << gridBits(error)
                   << " : " << gridBits(input)
                   << " : " << gridBits(wantedOutput) << "\n";
+        if (verbose) {
+            std::cerr << "[debug] target=" << targetIndex + 1
+                      << " generation=" << generation
+                      << " fitness=" << best.fitness << "/" << CUDA_XS
+                      << " ranking=" << best.rankingFitness
+                      << " tiebreaker=" << best.tiebreaker
+                      << " error=" << gridBits(error) << "\n";
+        }
         if (best.fitness == CUDA_XS) {
+            std::vector<CudaGenome> population;
+            downloadCudaPopulation(context, population);
+            return population;
+        }
+        if (generation + 1 >= maxGenerations) {
+            std::cerr << "Reached generation limit " << maxGenerations
+                      << " for target " << targetIndex + 1 << "\n";
             std::vector<CudaGenome> population;
             downloadCudaPopulation(context, population);
             return population;
@@ -280,7 +298,24 @@ std::vector<CudaGenome> evolveCuda(CudaTrainingContext* context,
 }
 
 int main(int argc, char** argv) {
-    const std::string targetPath = argc > 1 ? argv[1] : "wanted_outputs.txt";
+    std::string targetPath = "wanted_outputs.txt";
+    std::size_t maxGenerations = std::numeric_limits<std::size_t>::max();
+    for (int argument = 1; argument < argc; ++argument) {
+        const std::string option = argv[argument];
+        if (option == "-v" || option == "--verbose") {
+            verbose = true;
+        } else if (option == "--max-generations" && argument + 1 < argc) {
+            maxGenerations = std::stoull(argv[++argument]);
+        } else if (option.rfind("--max-generations=", 0) == 0) {
+            maxGenerations = std::stoull(option.substr(17));
+        } else if (!option.empty() && option[0] != '-') {
+            targetPath = option;
+        } else {
+            std::cerr << "Usage: " << argv[0]
+                      << " [-v|--verbose] [--max-generations N] [target-file]\n";
+            return 1;
+        }
+    }
     std::vector<Target> targets;
     if (!loadTargets(targetPath, targets)) {
         std::cerr << "Could not load targets from " << targetPath << "\n";
@@ -299,7 +334,7 @@ int main(int argc, char** argv) {
                   << " | input: " << targets[index].inputBits
                   << " | wanted output: " << targets[index].outputBits << "\n";
         population = evolveCuda(context, targets[index].input,
-                                 targets[index].output, index);
+                                 targets[index].output, index, maxGenerations);
     }
 
     destroyCudaTrainingContext(context);

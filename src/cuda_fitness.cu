@@ -69,18 +69,17 @@ __global__ void evaluatePopulation(const CudaGenome* genomes,
             if (refractory[index]) {
                 refractory[index] = false;
                 fired[index] = 0;
-                continue;
-            }
-
-            const int sum = accumulator[index] + nextInput[index];
-            if (sum >= threshold(genome.sensitivities[index])) {
-                fired[index] = genome.masks[index];
-                southLatch[index] = (genome.masks[index] & 0b0100) != 0;
-                accumulator[index] = 0;
-                refractory[index] = true;
             } else {
-                fired[index] = 0;
-                accumulator[index] = static_cast<std::uint8_t>(sum & 0b111);
+                const int sum = accumulator[index] + nextInput[index];
+                if (sum >= threshold(genome.sensitivities[index])) {
+                    fired[index] = genome.masks[index];
+                    southLatch[index] = (genome.masks[index] & 0b0100) != 0;
+                    accumulator[index] = 0;
+                    refractory[index] = true;
+                } else {
+                    fired[index] = 0;
+                    accumulator[index] = static_cast<std::uint8_t>(sum & 0b111);
+                }
             }
 
             if (index >= (CUDA_YS - 1) * CUDA_XS && southLatch[index])
@@ -288,6 +287,14 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
     struct CudaTrainingContext {
         CudaGenome* current = nullptr;
         CudaGenome* next = nullptr;
+        // Caches the best genome found by the most recent stepCudaTraining()
+        // call. Captured before current/next are swapped and before breeding
+        // overwrites next, so it stays valid regardless of swap timing —
+        // context->order is only meaningful against the population that was
+        // just evaluated, and current/next get swapped every step, so
+        // re-deriving "best" from order + current after the fact (as
+        // downloadCudaBestGenome used to) reads the wrong generation.
+        CudaGenome* bestGenome = nullptr;
         CudaEvaluation* evaluations = nullptr;
         int* order = nullptr;
         curandStatePhilox4_32_10_t* randomStates = nullptr;
@@ -316,10 +323,17 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
                              initialPopulation.size() *
                                  sizeof(curandStatePhilox4_32_10_t)),
                   "cudaMalloc random states");
+        checkCuda(cudaMalloc(&context->bestGenome, sizeof(CudaGenome)),
+                  "cudaMalloc best genome");
         checkCuda(cudaMemcpy(context->current, initialPopulation.data(),
                              initialPopulation.size() * sizeof(CudaGenome),
                              cudaMemcpyHostToDevice),
                   "cudaMemcpy initial population");
+        // Seed with a real genome so downloadCudaBestGenome() never returns
+        // uninitialized memory if it's somehow called before the first step.
+        checkCuda(cudaMemcpy(context->bestGenome, initialPopulation.data(),
+                             sizeof(CudaGenome), cudaMemcpyHostToDevice),
+                  "cudaMemcpy seed best genome");
         const int blocks = (context->populationSize + TRAIN_THREADS - 1) / TRAIN_THREADS;
         initializeRandomStates<<<blocks, TRAIN_THREADS>>>(
             context->randomStates, 0xA17F2026ULL, context->populationSize);
@@ -332,6 +346,7 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
         if (context == nullptr)
             return;
         cudaFree(context->randomStates);
+        cudaFree(context->bestGenome);
         cudaFree(context->order);
         cudaFree(context->evaluations);
         cudaFree(context->next);
@@ -368,6 +383,12 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
         checkCuda(cudaMemcpy(&best, context->evaluations + bestIndex,
                              sizeof(CudaEvaluation), cudaMemcpyDeviceToHost),
                   "cudaMemcpy best evaluation");
+        // Cache the best genome now, while bestIndex is still valid against
+        // context->current. Breeding + the swap below make current/order
+        // mismatched afterward, so this must happen first.
+        checkCuda(cudaMemcpy(context->bestGenome, context->current + bestIndex,
+                             sizeof(CudaGenome), cudaMemcpyDeviceToDevice),
+                  "cudaMemcpy cache best genome");
         if (best.fitness == CUDA_XS)
             return best;
 
@@ -393,11 +414,13 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
     }
 
     void downloadCudaBestGenome(CudaTrainingContext* context, CudaGenome& genome) {
-        int bestIndex = 0;
-        checkCuda(cudaMemcpy(&bestIndex, context->order, sizeof(int),
-                             cudaMemcpyDeviceToHost),
-                  "cudaMemcpy best index");
-        checkCuda(cudaMemcpy(&genome, context->current + bestIndex,
+        // context->bestGenome is captured inside stepCudaTraining(), before
+        // breeding/swap run, so it's always the true best genome from the
+        // most recently evaluated generation — unlike re-deriving it from
+        // context->order + context->current here, which would read from
+        // whichever population current happens to point at *now*, not the
+        // one order was computed against.
+        checkCuda(cudaMemcpy(&genome, context->bestGenome,
                              sizeof(CudaGenome), cudaMemcpyDeviceToHost),
                   "cudaMemcpy best genome");
     }
