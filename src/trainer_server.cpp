@@ -44,7 +44,7 @@ constexpr int N = CUDA_NEURON_COUNT;
 #endif
 constexpr int PORT = 8081;
 #ifndef CUDA_POPULATION_SIZE
-#define CUDA_POPULATION_SIZE 32768
+#define CUDA_POPULATION_SIZE 65536
 #endif
 #ifndef CUDA_MUTATION_RATE
 #define CUDA_MUTATION_RATE 0.04
@@ -133,15 +133,8 @@ bool parsePatternBits(const std::string& text, std::uint64_t& value) {
     value = 0;
     for (int index = 0; index < XS; ++index)
         if (binary[index] == '1')
-            value |= std::uint64_t{1} << (XS - 1 - index);
+            value |= std::uint64_t{1} << index;
     return true;
-}
-
-std::uint64_t reversePatternBits(std::uint64_t value) {
-    std::uint64_t reversed = 0;
-    for (int index = 0; index < XS; ++index)
-        reversed |= ((value >> index) & 1) << (XS - 1 - index);
-    return reversed;
 }
 
 bool loadWantedPatterns(const std::string& path, std::vector<WantedPattern>& patterns) {
@@ -185,7 +178,7 @@ bool loadWantedPatterns(const std::string& path, std::vector<WantedPattern>& pat
                       << ": expected exactly " << XS << " binary bits\n";
             return false;
         }
-        pattern.output = reversePatternBits(output);
+        pattern.output = output;
         patterns.push_back(pattern);
     }
     return !patterns.empty();
@@ -368,7 +361,7 @@ private:
     void applyTarget() {
         const auto& pattern = patterns[targetIndex];
         for (int index = 0; index < XS; ++index)
-            input[index] = ((pattern.input >> (XS - 1 - index)) & 1) ? 15 : 0;
+            input[index] = ((pattern.input >> index) & 1) ? 15 : 0;
         for (int index = 0; index < XS; ++index)
             wanted[index] = static_cast<std::uint8_t>((pattern.output >> index) & 1);
         applyInputToPopulation();
@@ -561,7 +554,7 @@ private:
     void applyTarget() {
         const auto& pattern = patterns[targetIndex];
         for (int index = 0; index < XS; ++index)
-            input[index] = ((pattern.input >> (XS - 1 - index)) & 1) ? 15 : 0;
+            input[index] = ((pattern.input >> index) & 1) ? 15 : 0;
         for (int index = 0; index < XS; ++index)
             wanted[index] = static_cast<std::uint8_t>((pattern.output >> index) & 1);
     }

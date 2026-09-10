@@ -10,7 +10,7 @@
 #include <vector>
 
 #ifndef CUDA_POPULATION_SIZE
-#define CUDA_POPULATION_SIZE 32768
+#define CUDA_POPULATION_SIZE 65536
 #endif
 #ifndef CUDA_MUTATION_RATE
 #define CUDA_MUTATION_RATE 0.04
@@ -48,6 +48,14 @@ std::string stripSpaces(const std::string& text) {
     return result;
 }
 
+std::string gridBits(std::uint64_t value) {
+    std::string result;
+    result.reserve(CUDA_XS);
+    for (int index = 0; index < CUDA_XS; ++index)
+        result += ((value >> index) & 1) ? '1' : '0';
+    return result;
+}
+
 bool parseBits(const std::string& text, std::uint64_t& value) {
     const std::string bits = stripSpaces(text);
     if (bits.size() != CUDA_XS)
@@ -56,23 +64,11 @@ bool parseBits(const std::string& text, std::uint64_t& value) {
         if (bit != '0' && bit != '1')
             return false;
     }
-    value = std::bitset<CUDA_XS>(bits).to_ullong();
+    value = 0;
+    for (int index = 0; index < CUDA_XS; ++index)
+        if (bits[index] == '1')
+            value |= std::uint64_t{1} << index;
     return true;
-}
-
-std::uint64_t reverseBits(std::uint64_t value) {
-    std::uint64_t reversed = 0;
-    for (int index = 0; index < CUDA_XS; ++index)
-        reversed |= ((value >> index) & 1) << (CUDA_XS - 1 - index);
-    return reversed;
-}
-
-std::string gridBits(std::uint64_t value) {
-    std::string result;
-    result.reserve(CUDA_XS);
-    for (int index = 0; index < CUDA_XS; ++index)
-        result += ((value >> index) & 1) ? '1' : '0';
-    return result;
 }
 
 bool loadTargets(const std::string& path, std::vector<Target>& targets) {
@@ -109,7 +105,7 @@ bool loadTargets(const std::string& path, std::vector<Target>& targets) {
             target.inputBits = stripSpaces(inputText);
         } else if (haveInput) {
             target.input = previousInput;
-            target.inputBits = std::bitset<CUDA_XS>(previousInput).to_string();
+            target.inputBits = gridBits(previousInput);
         } else {
             return false;
         }
@@ -119,9 +115,6 @@ bool loadTargets(const std::string& path, std::vector<Target>& targets) {
                       << ": expected " << CUDA_XS << " bits\n";
             return false;
         }
-        // Map the file's leftmost output bit to physical grid column 0,
-        // matching the input mapping and the CPU trainer.
-        target.output = reverseBits(target.output);
         targets.push_back(target);
     }
     return !targets.empty();
@@ -157,7 +150,7 @@ void mutate(CudaGenome& genome, std::mt19937& random) {
 
 void setInput(CudaGenome& genome, std::uint64_t input) {
     for (int index = 0; index < CUDA_XS; ++index)
-        genome.inputs[index] = ((input >> (CUDA_XS - 1 - index)) & 1) ? 15 : 0;
+        genome.inputs[index] = ((input >> index) & 1) ? 15 : 0;
 }
 
 CudaGenome crossover(const CudaGenome& first, const CudaGenome& second,
@@ -209,7 +202,8 @@ std::vector<CudaGenome> evolve(std::vector<CudaGenome> population,
         const auto ranked = rankPopulation(population, wantedOutput);
         const std::uint64_t error = ranked.front().output ^ wantedOutput;
         std::cout << (targetIndex + 1) << " : " << generation
-                  << " | " << gridBits(error) << "\n";
+                  << " | " << gridBits(error)
+                  << " : " << gridBits(input) << " : " << gridBits(wantedOutput) << "\n";
         if (ranked.front().fitness == CUDA_XS) {
             population.clear();
             for (const auto& item : ranked)

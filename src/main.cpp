@@ -96,7 +96,7 @@ std::string progressJson() {
     json << "],\"input\":[";
     for (int index = 0; index < XS; ++index) {
         if (index) json << ',';
-        json << ((progress.input >> (XS - 1 - index)) & 1);
+        json << ((progress.input >> index) & 1);
     }
     json << "],\"mask\":[";
     for (int index = 0; index < NEURON_COUNT; ++index) {
@@ -197,6 +197,14 @@ std::string binaryPart(const std::string& text) {
     return result;
 }
 
+std::string gridBits(std::uint64_t value) {
+    std::string result;
+    result.reserve(XS);
+    for (int index = 0; index < XS; ++index)
+        result += ((value >> index) & 1) ? '1' : '0';
+    return result;
+}
+
 bool parseBits(const std::string& text, std::uint64_t& value) {
     const std::string bits = binaryPart(text);
     if (bits.size() != XS)
@@ -206,15 +214,11 @@ bool parseBits(const std::string& text, std::uint64_t& value) {
             return false;
     }
 
-    value = std::bitset<XS>(bits).to_ullong();
-    return true;
-}
-
-std::uint64_t reverseBits(std::uint64_t value) {
-    std::uint64_t reversed = 0;
+    value = 0;
     for (int index = 0; index < XS; ++index)
-        reversed |= ((value >> index) & 1) << (XS - 1 - index);
-    return reversed;
+        if (bits[index] == '1')
+            value |= std::uint64_t{1} << index;
+    return true;
 }
 
 bool loadWantedPatterns(const std::string& path,
@@ -251,7 +255,7 @@ bool loadWantedPatterns(const std::string& path,
             havePreviousInput = true;
         } else if (havePreviousInput) {
             pattern.input = previousInput;
-            pattern.inputBits = std::bitset<XS>(previousInput).to_string();
+            pattern.inputBits = gridBits(previousInput);
         } else {
             std::cerr << "Missing input pattern on line " << lineNumber << "\n";
             return false;
@@ -262,11 +266,8 @@ bool loadWantedPatterns(const std::string& path,
                       << ": expected exactly " << XS << " binary bits\n";
             return false;
         }
-        // File bit 0 is the rightmost character; map the leftmost file bit
-        // to physical grid column 0, matching the input-row mapping.
-        pattern.output = reverseBits(pattern.output);
         if (pattern.inputBits.empty())
-            pattern.inputBits = std::bitset<XS>(pattern.input).to_string();
+            pattern.inputBits = gridBits(pattern.input);
         patterns.push_back(pattern);
     }
     return !patterns.empty();
@@ -275,7 +276,7 @@ bool loadWantedPatterns(const std::string& path,
 void applyInputPattern(std::vector<ChunkGenome>& pool, std::uint64_t input) {
     for (auto& genome : pool) {
         for (int index = 0; index < XS; ++index)
-            genome.inputs[index] = (input >> (XS - 1 - index) & 1) ? 15 : 0;
+            genome.inputs[index] = (input >> index & 1) ? 15 : 0;
     }
 }
 

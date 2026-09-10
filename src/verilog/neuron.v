@@ -8,13 +8,15 @@ module neuron (
     output reg [3:0] Mask,
     output reg [1:0] Sens,
     output wire [2:0] Accu,
-    output wire [2:0] Thresh
+    output wire [2:0] Thresh,
+    output wire south_latched
 );
 
     reg [3:0] mask;
     reg [2:0] accu;
     reg [1:0] sens;
     reg refa;
+    reg south_latch;
 
     wire [2:0] thresh =
     (sens == 2'b00) ? 3'd1 :
@@ -24,6 +26,7 @@ module neuron (
 
     assign Accu = accu;
     assign Thresh = thresh;
+    assign south_latched = south_latch;
 
 
 
@@ -36,6 +39,7 @@ module neuron (
             mask <= mask_in;
             sens <= sens_in;
             out_fire <= 4'b0000;
+            south_latch <= 1'b0;
         end else begin
             
             if (refa) begin
@@ -46,6 +50,7 @@ module neuron (
             else if (accu_sum >= {2'b00, thresh}) begin
 
                 out_fire <= mask;
+                south_latch <= mask[2];
                 accu <= 3'b000;
                 refa <= 1'b1;
             end

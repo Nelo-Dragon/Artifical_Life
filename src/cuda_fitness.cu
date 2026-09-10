@@ -31,6 +31,7 @@ __global__ void evaluatePopulation(const CudaGenome* genomes,
     const CudaGenome& genome = genomes[genomeIndex];
     std::uint8_t accumulator[CUDA_NEURON_COUNT] = {};
     bool refractory[CUDA_NEURON_COUNT] = {};
+    bool southLatch[CUDA_NEURON_COUNT] = {};
     std::uint8_t fired[CUDA_NEURON_COUNT] = {};
     std::uint8_t nextInput[CUDA_NEURON_COUNT];
     const int warmupCycles = CUDA_YS - 1;
@@ -69,6 +70,7 @@ __global__ void evaluatePopulation(const CudaGenome* genomes,
             const int sum = accumulator[index] + nextInput[index];
             if (sum >= threshold(genome.sensitivities[index])) {
                 fired[index] = genome.masks[index];
+                southLatch[index] = (genome.masks[index] & 0b0100) != 0;
                 accumulator[index] = 0;
                 refractory[index] = true;
             } else {
@@ -76,7 +78,7 @@ __global__ void evaluatePopulation(const CudaGenome* genomes,
                 accumulator[index] = static_cast<std::uint8_t>(sum & 0b111);
             }
 
-            if (index >= (CUDA_YS - 1) * CUDA_XS && (fired[index] & 0b0100) != 0)
+            if (index >= (CUDA_YS - 1) * CUDA_XS && southLatch[index])
                 output |= std::uint64_t{1} << (index - (CUDA_YS - 1) * CUDA_XS);
         }
 
@@ -133,10 +135,20 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
     const std::size_t populationSize = hostGenomes.size();
     hostEvaluations.resize(populationSize);
 
-    CudaGenome* deviceGenomes = nullptr;
-    CudaEvaluation* deviceEvaluations = nullptr;
-    checkCuda(cudaMalloc(&deviceGenomes, populationSize * sizeof(CudaGenome)), "cudaMalloc genomes");
-    checkCuda(cudaMalloc(&deviceEvaluations, populationSize * sizeof(CudaEvaluation)), "cudaMalloc evaluations");
+    static CudaGenome* deviceGenomes = nullptr;
+    static CudaEvaluation* deviceEvaluations = nullptr;
+    static std::size_t deviceCapacity = 0;
+    if (populationSize > deviceCapacity) {
+        if (deviceEvaluations != nullptr)
+            checkCuda(cudaFree(deviceEvaluations), "cudaFree evaluations");
+        if (deviceGenomes != nullptr)
+            checkCuda(cudaFree(deviceGenomes), "cudaFree genomes");
+        checkCuda(cudaMalloc(&deviceGenomes, populationSize * sizeof(CudaGenome)),
+                  "cudaMalloc genomes");
+        checkCuda(cudaMalloc(&deviceEvaluations, populationSize * sizeof(CudaEvaluation)),
+                  "cudaMalloc evaluations");
+        deviceCapacity = populationSize;
+    }
 
     checkCuda(cudaMemcpy(deviceGenomes, hostGenomes.data(),
                          populationSize * sizeof(CudaGenome), cudaMemcpyHostToDevice),
@@ -154,6 +166,4 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
                          populationSize * sizeof(CudaEvaluation), cudaMemcpyDeviceToHost),
               "cudaMemcpy evaluations");
 
-    cudaFree(deviceEvaluations);
-    cudaFree(deviceGenomes);
 }

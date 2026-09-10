@@ -18,6 +18,7 @@ module chunk #(
     localparam N = XS * YS;
 
     wire [3:0] neuron_out [0:N-1];
+    wire neuron_south_latched [0:N-1];
     wire [3:0] neuron_in [0:N-1];
     wire [3:0] input_term [0:N-1];
     wire [3:0] north_term [0:N-1];
@@ -77,6 +78,7 @@ module chunk #(
                 .Sens(Sens_msk[i])
                 ,.Accu(accu_msk[i])
                 ,.Thresh(thresh_msk[i])
+                ,.south_latched(neuron_south_latched[i])
             );
             assign fire_msk[i] = neuron_out[i];
         end
@@ -84,7 +86,7 @@ module chunk #(
 
     always @(*) begin
         for (output_x = 0; output_x < XS; output_x = output_x + 1)
-            out[output_x] = neuron_out[(YS - 1) * XS + output_x][2];
+            out[output_x] = neuron_south_latched[(YS - 1) * XS + output_x];
     end
 
 
