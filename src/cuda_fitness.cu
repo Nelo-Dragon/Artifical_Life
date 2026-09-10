@@ -367,10 +367,6 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
         checkCuda(cudaDeviceSynchronize(), "set training input synchronize");
     }
 
-    void setCudaByteInput(CudaTrainingContext* context, std::uint8_t byte) {
-        setCudaTrainingInput(context, static_cast<std::uint64_t>(byte));
-    }
-
     CudaEvaluation stepCudaTraining(CudaTrainingContext* context,
                                     std::uint64_t wantedOutput) {
         const int blocks = (context->populationSize + TRAIN_THREADS - 1) / TRAIN_THREADS;
@@ -413,9 +409,6 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
         return best;
     }
 
-    std::uint8_t cudaEvaluationByteOutput(const CudaEvaluation& evaluation) {
-        return static_cast<std::uint8_t>(evaluation.output & 0xffu);
-    }
 
     void downloadCudaPopulation(CudaTrainingContext* context,
                                 std::vector<CudaGenome>& population) {
@@ -484,6 +477,11 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
             for (int neuron = 0; neuron < CUDA_NEURON_COUNT; ++neuron) {
                 totalMaskBits += __builtin_popcount(genome.masks[neuron]);
                 totalSensitivity += genome.sensitivities[neuron];
+                for (int direction = 0; direction < 4; ++direction)
+                    diagnostics.directionMaskCounts[direction] +=
+                        (genome.masks[neuron] >> direction) & 1;
+                diagnostics.activeFireNeuronCount +=
+                    evaluation.fire[neuron] != 0;
             }
             for (int bit = 0; bit < CUDA_XS; ++bit)
                 diagnostics.outputBitCounts[bit] +=

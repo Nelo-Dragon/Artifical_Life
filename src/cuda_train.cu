@@ -25,6 +25,7 @@ constexpr std::size_t ELITE_COUNT = std::max<std::size_t>(
 constexpr double MUTATION_RATE = CUDA_MUTATION_RATE;
 constexpr std::size_t PLATEAU_GENERATIONS = 150;
 bool verbose = false;
+std::string emergenceLogPath;
 
 struct Target {
     std::uint64_t input;
@@ -268,16 +269,36 @@ std::vector<CudaGenome> evolveCuda(CudaTrainingContext* context,
     while (true) {
         const CudaEvaluation best = stepCudaTraining(context, wantedOutput);
         const std::uint64_t error = best.output ^ wantedOutput;
+        CudaTrainingDiagnostics diagnostics{};
         std::cout << (targetIndex + 1) << " : " << generation
                   << " | " << gridBits(error)
                   << " : " << gridBits(input)
                   << " : " << gridBits(wantedOutput) << "\n";
-        if (verbose) {
+        if (verbose ||
+            (!emergenceLogPath.empty() && generation % 100 == 0)) {
             CudaGenome bestGenome{};
-            CudaTrainingDiagnostics diagnostics{};
             downloadCudaBestGenome(context, bestGenome);
             downloadCudaTrainingDiagnostics(context, wantedOutput, bestGenome,
                                             diagnostics);
+            if (!emergenceLogPath.empty() && generation % 100 == 0) {
+                std::ofstream log(emergenceLogPath, std::ios::app);
+                log << "target=" << targetIndex + 1
+                    << " generation=" << generation
+                    << " fitness=" << best.fitness
+                    << " output=" << gridBits(best.output)
+                    << " mask[n,e,s,w]="
+                    << diagnostics.directionMaskCounts[0] << ","
+                    << diagnostics.directionMaskCounts[1] << ","
+                    << diagnostics.directionMaskCounts[2] << ","
+                    << diagnostics.directionMaskCounts[3]
+                    << " active-fire=" << diagnostics.activeFireNeuronCount
+                    << " unique-genomes=" << diagnostics.uniqueGenomeHashCount
+                    << " unique-outputs=" << diagnostics.uniqueOutputCount
+                    << " exact-output=" << diagnostics.exactWantedOutputCount
+                    << "\n";
+            }
+        }
+        if (verbose) {
             std::cerr << "[debug] target=" << targetIndex + 1
                       << " generation=" << generation
                       << " fitness=" << best.fitness << "/" << CUDA_XS
@@ -344,11 +365,16 @@ int main(int argc, char** argv) {
             maxGenerations = std::stoull(argv[++argument]);
         } else if (option.rfind("--max-generations=", 0) == 0) {
             maxGenerations = std::stoull(option.substr(17));
+        } else if (option == "--emergence-log" && argument + 1 < argc) {
+            emergenceLogPath = argv[++argument];
+        } else if (option.rfind("--emergence-log=", 0) == 0) {
+            emergenceLogPath = option.substr(17);
         } else if (!option.empty() && option[0] != '-') {
             targetPath = option;
         } else {
             std::cerr << "Usage: " << argv[0]
-                      << " [-v|--verbose] [--max-generations N] [target-file]\n";
+                      << " [-v|--verbose] [--max-generations N]"
+                      << " [--emergence-log PATH] [target-file]\n";
             return 1;
         }
     }

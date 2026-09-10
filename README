@@ -18,28 +18,15 @@ language learner, or an FPGA implementation.
 | Per-neuron mask and sensitivity editing | Implemented |
 | Small mutation search in the browser | Implemented |
 | Population-based training in `src/main.cpp` | Implemented, separate from the browser server |
-| `in_chunk` input interpreter | Implemented |
-| `out_chunk` output interpreter | Implemented |
+| `in_chunk` input interpreter | **NOT COMPLETED** |
+| `out_chunk` output interpreter | **NOT COMPLETED** |
 | Multiple connected chunks / `C_LINK` | Link primitive implemented |
-| FPGA synthesis and hardware validation | Lint/synthesis targets implemented |
-| ASCII byte-stream transport | Implemented by the stream adapters |
+| FPGA synthesis and hardware validation | **NOT COMPLETED** |
 | Language learning objective/trainer | **NOT COMPLETED** |
 
-`in_chunk`, `out_chunk`, `c_link`, and `c_link_bank` are implemented in
-`src/verilog/chunk.v`. They use an explicitly clocked valid protocol and
-preserve the existing chunk input convention: a set bit is represented by a
-full-strength pulse (`4'hf` at the chunk boundary).
-
-The same file includes `memory_region`, `cortex_region`, and `output_region`.
-These provide a synchronous byte-memory boundary, a clocked cortex byte
-stream, and selectable memory-versus-final-output routing. They are separate
-from the existing `chunk` module so current Verilator and CUDA behavior remains
-unchanged.
-
-`cognitive_pipeline` wires those three regions into a small byte-stream
-proof-of-concept. Set `to_memory` to write cortex bytes at `write_address`;
-set it low to emit cortex bytes directly, or assert `read_valid` to emit a
-previously stored byte from `read_address`.
+`c_link` and `c_link_bank` are the only additional structural primitives.
+They carry pulse buses between independently evolved chunk regions; they do
+not assign functional roles to those regions.
 
 ## What Is Implemented
 
@@ -156,10 +143,6 @@ loading of `wanted_outputs.txt`. The default CUDA build is `16x16`; override
 the dimensions with `CUDA_XS` and `CUDA_YS` (the shipped `wanted_outputs.txt`
 uses 16-bit patterns).
 
-The CUDA fitness API also exposes `setCudaByteInput()` and
-`cudaEvaluationByteOutput()` for byte-stream adapters. They use the low eight
-input/output bits and preserve the same bit ordering as `in_chunk` and
-`out_chunk`.
 
 The dashboard defaults to `4x8`; override its build dimensions with:
 
@@ -228,19 +211,6 @@ The server exposes these endpoints on port `8080`:
 
 ## Planned Regions
 
-### `in_chunk`
-
-`in_chunk` accepts one byte when `data_valid && data_ready` and emits its
-eight bits least-significant-bit first as eight valid pulse cycles. This is
-binary-safe and therefore ASCII-compatible; framing and higher-level token
-semantics remain outside the chunk.
-
-### `out_chunk`
-
-`out_chunk` samples eight valid pulse cycles and emits one byte with a
-one-cycle `data_valid` indication. It uses the same least-significant-bit
-first convention as `in_chunk`.
-
 ### Connected regional chunks
 
 `c_link` connects one source pulse bus to one destination pulse bus, and
@@ -248,18 +218,20 @@ first convention as `in_chunk`.
 interconnect primitives; a system-level multi-chunk wrapper still needs to
 instantiate the chunks and define its link table.
 
-### FPGA validation
+### Emergence diagnostics
 
-`make fpga-lint` runs Verilator lint over the chunk and adapter modules.
-`make fpga-synth` runs Yosys synthesis when Yosys is installed:
+The CUDA trainer keeps the normal ranking, selection, crossover, and mutation
+loop unchanged. To inspect structures without assigning them roles, run:
 
 ```sh
-sudo apt install yosys
-make fpga-lint
-make fpga-synth
+./obj_dir/cuda_train --emergence-log emergence.log wanted_outputs.txt
 ```
 
-The repository does not claim a place-and-route result for a specific FPGA.
+Every 100 generations the log records best fitness/output, genome direction
+mask distribution, final-cycle active neurons, genome/output diversity, and
+the number of genomes matching the target. The current genome format has no
+`C_LINK` genes, so link utilization is not fabricated; once links are encoded
+in the evolvable genome, the same diagnostic should count active links.
 
 ## Scope And Caveats
 
@@ -267,6 +239,5 @@ The project is best described today as an evolvable cellular automaton with
 sparse local pulse routing. The FPGA capacity figures and biological
 comparisons that were previously in this file were design notes, not measured
 results, so they are intentionally not presented as capabilities of the
-current implementation. No language-learning result or complete multi-chunk
-system is claimed here; the available link and byte-stream primitives are
-validated by Verilator lint.
+current implementation. No FPGA synthesis, language-learning result, or
+complete multi-chunk system is claimed here.

@@ -40,6 +40,8 @@ struct CudaTrainingDiagnostics {
     int nonzeroOutputCount = 0;
     int exactWantedOutputCount = 0;
     int outputBitCounts[CUDA_XS]{};
+    int directionMaskCounts[4]{};
+    int activeFireNeuronCount = 0;
     double averageMaskBits = 0.0;
     double averageSensitivity = 0.0;
 };
@@ -54,10 +56,8 @@ CudaTrainingContext* createCudaTrainingContext(
     const std::vector<CudaGenome>& initialPopulation);
 void destroyCudaTrainingContext(CudaTrainingContext* context);
 void setCudaTrainingInput(CudaTrainingContext* context, std::uint64_t input);
-void setCudaByteInput(CudaTrainingContext* context, std::uint8_t byte);
 CudaEvaluation stepCudaTraining(CudaTrainingContext* context,
                                 std::uint64_t wantedOutput);
-std::uint8_t cudaEvaluationByteOutput(const CudaEvaluation& evaluation);
 void downloadCudaPopulation(CudaTrainingContext* context,
                             std::vector<CudaGenome>& population);
 void downloadCudaBestGenome(CudaTrainingContext* context, CudaGenome& genome);
