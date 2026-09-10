@@ -262,12 +262,37 @@ std::vector<CudaGenome> evolveCuda(CudaTrainingContext* context,
                   << " : " << gridBits(input)
                   << " : " << gridBits(wantedOutput) << "\n";
         if (verbose) {
+            CudaGenome bestGenome{};
+            CudaTrainingDiagnostics diagnostics{};
+            downloadCudaBestGenome(context, bestGenome);
+            downloadCudaTrainingDiagnostics(context, wantedOutput, bestGenome,
+                                            diagnostics);
             std::cerr << "[debug] target=" << targetIndex + 1
                       << " generation=" << generation
                       << " fitness=" << best.fitness << "/" << CUDA_XS
                       << " ranking=" << best.rankingFitness
                       << " tiebreaker=" << best.tiebreaker
-                      << " error=" << gridBits(error) << "\n";
+                      << " output=" << gridBits(best.output)
+                      << " input=" << gridBits(input)
+                      << " wanted=" << gridBits(wantedOutput)
+                      << " error=" << gridBits(error)
+                      << " exact-output=" << diagnostics.exactWantedOutputCount
+                      << " nonzero-output=" << diagnostics.nonzeroOutputCount
+                      << " unique-outputs=" << diagnostics.uniqueOutputCount
+                      << " exact-best=" << diagnostics.exactBestGenomeCount
+                      << " unique=" << diagnostics.uniqueGenomeHashCount
+                      << " avg-mask-bits=" << diagnostics.averageMaskBits
+                      << " avg-sensitivity=" << diagnostics.averageSensitivity
+                      << " fitness-counts=";
+            for (int fitness = CUDA_XS; fitness >= 0; --fitness)
+                if (diagnostics.fitnessCounts[fitness] != 0)
+                    std::cerr << fitness << ":"
+                              << diagnostics.fitnessCounts[fitness] << ",";
+            std::cerr << " output-ones=";
+            for (int bit = 0; bit < CUDA_XS; ++bit)
+                std::cerr << diagnostics.outputBitCounts[bit]
+                          << (bit + 1 == CUDA_XS ? "" : ",");
+            std::cerr << "\n";
         }
         if (best.fitness == CUDA_XS) {
             std::vector<CudaGenome> population;

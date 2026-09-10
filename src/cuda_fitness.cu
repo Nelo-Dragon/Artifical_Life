@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <cstring>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -287,6 +289,7 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
     struct CudaTrainingContext {
         CudaGenome* current = nullptr;
         CudaGenome* next = nullptr;
+        CudaGenome* evaluatedPopulation = nullptr;
         // Caches the best genome found by the most recent stepCudaTraining()
         // call. Captured before current/next are swapped and before breeding
         // overwrites next, so it stays valid regardless of swap timing —
@@ -370,6 +373,7 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
         evaluatePopulation<<<blocks, TRAIN_THREADS>>>(
             context->current, wantedOutput, context->populationSize,
             context->evaluations);
+        context->evaluatedPopulation = context->current;
         checkCuda(cudaGetLastError(), "resident evaluation launch");
         thrust::device_ptr<int> order(context->order);
         thrust::sequence(order, order + context->populationSize);
@@ -401,6 +405,7 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
         checkCuda(cudaGetLastError(), "resident breeding launch");
         checkCuda(cudaDeviceSynchronize(), "resident breeding synchronize");
         std::swap(context->current, context->next);
+        context->evaluatedPopulation = context->next;
         return best;
     }
 
@@ -423,6 +428,67 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
         checkCuda(cudaMemcpy(&genome, context->bestGenome,
                              sizeof(CudaGenome), cudaMemcpyDeviceToHost),
                   "cudaMemcpy best genome");
+    }
+
+    void downloadCudaTrainingDiagnostics(CudaTrainingContext* context,
+                                        std::uint64_t wantedOutput,
+                                        const CudaGenome& bestGenome,
+                                        CudaTrainingDiagnostics& diagnostics) {
+        std::vector<CudaGenome> population(context->populationSize);
+        std::vector<CudaEvaluation> evaluations(context->populationSize);
+        checkCuda(cudaMemcpy(population.data(), context->evaluatedPopulation,
+                            population.size() * sizeof(CudaGenome),
+                            cudaMemcpyDeviceToHost),
+                  "cudaMemcpy diagnostic population");
+        checkCuda(cudaMemcpy(evaluations.data(), context->evaluations,
+                            evaluations.size() * sizeof(CudaEvaluation),
+                            cudaMemcpyDeviceToHost),
+                  "cudaMemcpy diagnostic evaluations");
+
+        diagnostics = {};
+        diagnostics.populationSize = context->populationSize;
+        std::unordered_set<std::uint64_t> genomeHashes;
+        std::unordered_set<std::uint64_t> outputs;
+        genomeHashes.reserve(population.size());
+        outputs.reserve(population.size());
+        double totalMaskBits = 0.0;
+        double totalSensitivity = 0.0;
+        for (std::size_t index = 0; index < population.size(); ++index) {
+            const CudaGenome& genome = population[index];
+            const CudaEvaluation& evaluation = evaluations[index];
+            if (evaluation.fitness >= 0 && evaluation.fitness <= CUDA_XS)
+                ++diagnostics.fitnessCounts[evaluation.fitness];
+            if (evaluation.output == wantedOutput)
+                ++diagnostics.exactWantedOutputCount;
+            if (evaluation.output != 0)
+                ++diagnostics.nonzeroOutputCount;
+            outputs.insert(evaluation.output);
+            if (std::memcmp(&genome, &bestGenome, sizeof(CudaGenome)) == 0)
+                ++diagnostics.exactBestGenomeCount;
+
+            std::uint64_t hash = 1469598103934665603ULL;
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(&genome);
+            for (std::size_t byte = 0; byte < sizeof(CudaGenome); ++byte) {
+                hash ^= bytes[byte];
+                hash *= 1099511628211ULL;
+            }
+            genomeHashes.insert(hash);
+            for (int neuron = 0; neuron < CUDA_NEURON_COUNT; ++neuron) {
+                totalMaskBits += __builtin_popcount(genome.masks[neuron]);
+                totalSensitivity += genome.sensitivities[neuron];
+            }
+            for (int bit = 0; bit < CUDA_XS; ++bit)
+                diagnostics.outputBitCounts[bit] +=
+                   static_cast<int>((evaluation.output >> bit) & 1);
+        }
+        diagnostics.uniqueGenomeHashCount =
+            static_cast<int>(genomeHashes.size());
+        diagnostics.uniqueOutputCount = static_cast<int>(outputs.size());
+        const double genomeCount = static_cast<double>(population.size());
+        diagnostics.averageMaskBits =
+            totalMaskBits / (genomeCount * CUDA_NEURON_COUNT);
+        diagnostics.averageSensitivity =
+            totalSensitivity / (genomeCount * CUDA_NEURON_COUNT);
     }
 
     void reseedCudaTraining(CudaTrainingContext* context,

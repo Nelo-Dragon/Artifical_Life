@@ -31,6 +31,19 @@ struct CudaEvaluation {
     std::uint8_t thresh[CUDA_NEURON_COUNT]{};
 };
 
+struct CudaTrainingDiagnostics {
+    int populationSize = 0;
+    int fitnessCounts[CUDA_XS + 1]{};
+    int exactBestGenomeCount = 0;
+    int uniqueGenomeHashCount = 0;
+    int uniqueOutputCount = 0;
+    int nonzeroOutputCount = 0;
+    int exactWantedOutputCount = 0;
+    int outputBitCounts[CUDA_XS]{};
+    double averageMaskBits = 0.0;
+    double averageSensitivity = 0.0;
+};
+
 void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
                             std::uint64_t wantedOutput,
                             std::vector<CudaEvaluation>& hostEvaluations);
@@ -46,6 +59,10 @@ CudaEvaluation stepCudaTraining(CudaTrainingContext* context,
 void downloadCudaPopulation(CudaTrainingContext* context,
                             std::vector<CudaGenome>& population);
 void downloadCudaBestGenome(CudaTrainingContext* context, CudaGenome& genome);
+void downloadCudaTrainingDiagnostics(CudaTrainingContext* context,
+                                     std::uint64_t wantedOutput,
+                                     const CudaGenome& bestGenome,
+                                     CudaTrainingDiagnostics& diagnostics);
 void reseedCudaTraining(CudaTrainingContext* context,
                         const CudaGenome& best,
                         std::uint64_t input);

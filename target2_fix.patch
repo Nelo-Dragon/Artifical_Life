@@ -1,0 +1,198 @@
+diff --git a/src/cuda_fitness.cu b/src/cuda_fitness.cu
+index 11f46c9..39bfbc5 100644
+--- a/src/cuda_fitness.cu
++++ b/src/cuda_fitness.cu
+@@ -69,18 +69,17 @@ __global__ void evaluatePopulation(const CudaGenome* genomes,
+             if (refractory[index]) {
+                 refractory[index] = false;
+                 fired[index] = 0;
+-                continue;
+-            }
+-
+-            const int sum = accumulator[index] + nextInput[index];
+-            if (sum >= threshold(genome.sensitivities[index])) {
+-                fired[index] = genome.masks[index];
+-                southLatch[index] = (genome.masks[index] & 0b0100) != 0;
+-                accumulator[index] = 0;
+-                refractory[index] = true;
+             } else {
+-                fired[index] = 0;
+-                accumulator[index] = static_cast<std::uint8_t>(sum & 0b111);
++                const int sum = accumulator[index] + nextInput[index];
++                if (sum >= threshold(genome.sensitivities[index])) {
++                    fired[index] = genome.masks[index];
++                    southLatch[index] = (genome.masks[index] & 0b0100) != 0;
++                    accumulator[index] = 0;
++                    refractory[index] = true;
++                } else {
++                    fired[index] = 0;
++                    accumulator[index] = static_cast<std::uint8_t>(sum & 0b111);
++                }
+             }
+ 
+             if (index >= (CUDA_YS - 1) * CUDA_XS && southLatch[index])
+@@ -288,6 +287,14 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
+     struct CudaTrainingContext {
+         CudaGenome* current = nullptr;
+         CudaGenome* next = nullptr;
++        // Caches the best genome found by the most recent stepCudaTraining()
++        // call. Captured before current/next are swapped and before breeding
++        // overwrites next, so it stays valid regardless of swap timing —
++        // context->order is only meaningful against the population that was
++        // just evaluated, and current/next get swapped every step, so
++        // re-deriving "best" from order + current after the fact (as
++        // downloadCudaBestGenome used to) reads the wrong generation.
++        CudaGenome* bestGenome = nullptr;
+         CudaEvaluation* evaluations = nullptr;
+         int* order = nullptr;
+         curandStatePhilox4_32_10_t* randomStates = nullptr;
+@@ -316,10 +323,17 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
+                              initialPopulation.size() *
+                                  sizeof(curandStatePhilox4_32_10_t)),
+                   "cudaMalloc random states");
++        checkCuda(cudaMalloc(&context->bestGenome, sizeof(CudaGenome)),
++                  "cudaMalloc best genome");
+         checkCuda(cudaMemcpy(context->current, initialPopulation.data(),
+                              initialPopulation.size() * sizeof(CudaGenome),
+                              cudaMemcpyHostToDevice),
+                   "cudaMemcpy initial population");
++        // Seed with a real genome so downloadCudaBestGenome() never returns
++        // uninitialized memory if it's somehow called before the first step.
++        checkCuda(cudaMemcpy(context->bestGenome, initialPopulation.data(),
++                             sizeof(CudaGenome), cudaMemcpyHostToDevice),
++                  "cudaMemcpy seed best genome");
+         const int blocks = (context->populationSize + TRAIN_THREADS - 1) / TRAIN_THREADS;
+         initializeRandomStates<<<blocks, TRAIN_THREADS>>>(
+             context->randomStates, 0xA17F2026ULL, context->populationSize);
+@@ -332,6 +346,7 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
+         if (context == nullptr)
+             return;
+         cudaFree(context->randomStates);
++        cudaFree(context->bestGenome);
+         cudaFree(context->order);
+         cudaFree(context->evaluations);
+         cudaFree(context->next);
+@@ -368,6 +383,12 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
+         checkCuda(cudaMemcpy(&best, context->evaluations + bestIndex,
+                              sizeof(CudaEvaluation), cudaMemcpyDeviceToHost),
+                   "cudaMemcpy best evaluation");
++        // Cache the best genome now, while bestIndex is still valid against
++        // context->current. Breeding + the swap below make current/order
++        // mismatched afterward, so this must happen first.
++        checkCuda(cudaMemcpy(context->bestGenome, context->current + bestIndex,
++                             sizeof(CudaGenome), cudaMemcpyDeviceToDevice),
++                  "cudaMemcpy cache best genome");
+         if (best.fitness == CUDA_XS)
+             return best;
+ 
+@@ -393,11 +414,13 @@ void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
+     }
+ 
+     void downloadCudaBestGenome(CudaTrainingContext* context, CudaGenome& genome) {
+-        int bestIndex = 0;
+-        checkCuda(cudaMemcpy(&bestIndex, context->order, sizeof(int),
+-                             cudaMemcpyDeviceToHost),
+-                  "cudaMemcpy best index");
+-        checkCuda(cudaMemcpy(&genome, context->current + bestIndex,
++        // context->bestGenome is captured inside stepCudaTraining(), before
++        // breeding/swap run, so it's always the true best genome from the
++        // most recently evaluated generation — unlike re-deriving it from
++        // context->order + context->current here, which would read from
++        // whichever population current happens to point at *now*, not the
++        // one order was computed against.
++        checkCuda(cudaMemcpy(&genome, context->bestGenome,
+                              sizeof(CudaGenome), cudaMemcpyDeviceToHost),
+                   "cudaMemcpy best genome");
+     }
+diff --git a/src/cuda_train.cu b/src/cuda_train.cu
+index e5db118..fe789ef 100644
+--- a/src/cuda_train.cu
++++ b/src/cuda_train.cu
+@@ -8,6 +8,7 @@
+ #include <random>
+ #include <string>
+ #include <vector>
++#include <limits>
+ 
+ #ifndef CUDA_POPULATION_SIZE
+ #define CUDA_POPULATION_SIZE 65536
+@@ -23,6 +24,7 @@ constexpr std::size_t ELITE_COUNT = std::max<std::size_t>(
+     1, POPULATION_SIZE * CUDA_ELITE_PERCENT / 100);
+ constexpr double MUTATION_RATE = CUDA_MUTATION_RATE;
+ constexpr std::size_t PLATEAU_GENERATIONS = 150;
++bool verbose = false;
+ 
+ struct Target {
+     std::uint64_t input;
+@@ -247,7 +249,8 @@ std::vector<CudaGenome> evolve(std::vector<CudaGenome> population,
+ std::vector<CudaGenome> evolveCuda(CudaTrainingContext* context,
+                                    std::uint64_t input,
+                                    std::uint64_t wantedOutput,
+-                                   std::size_t targetIndex) {
++                                   std::size_t targetIndex,
++                                   std::size_t maxGenerations) {
+     std::size_t generation = 0;
+     std::size_t stagnantGenerations = 0;
+     float bestRankingFitness = -1.0f;
+@@ -258,11 +261,26 @@ std::vector<CudaGenome> evolveCuda(CudaTrainingContext* context,
+                   << " | " << gridBits(error)
+                   << " : " << gridBits(input)
+                   << " : " << gridBits(wantedOutput) << "\n";
++        if (verbose) {
++            std::cerr << "[debug] target=" << targetIndex + 1
++                      << " generation=" << generation
++                      << " fitness=" << best.fitness << "/" << CUDA_XS
++                      << " ranking=" << best.rankingFitness
++                      << " tiebreaker=" << best.tiebreaker
++                      << " error=" << gridBits(error) << "\n";
++        }
+         if (best.fitness == CUDA_XS) {
+             std::vector<CudaGenome> population;
+             downloadCudaPopulation(context, population);
+             return population;
+         }
++        if (generation + 1 >= maxGenerations) {
++            std::cerr << "Reached generation limit " << maxGenerations
++                      << " for target " << targetIndex + 1 << "\n";
++            std::vector<CudaGenome> population;
++            downloadCudaPopulation(context, population);
++            return population;
++        }
+         if (best.rankingFitness > bestRankingFitness) {
+             bestRankingFitness = best.rankingFitness;
+             stagnantGenerations = 0;
+@@ -280,7 +298,24 @@ std::vector<CudaGenome> evolveCuda(CudaTrainingContext* context,
+ }
+ 
+ int main(int argc, char** argv) {
+-    const std::string targetPath = argc > 1 ? argv[1] : "wanted_outputs.txt";
++    std::string targetPath = "wanted_outputs.txt";
++    std::size_t maxGenerations = std::numeric_limits<std::size_t>::max();
++    for (int argument = 1; argument < argc; ++argument) {
++        const std::string option = argv[argument];
++        if (option == "-v" || option == "--verbose") {
++            verbose = true;
++        } else if (option == "--max-generations" && argument + 1 < argc) {
++            maxGenerations = std::stoull(argv[++argument]);
++        } else if (option.rfind("--max-generations=", 0) == 0) {
++            maxGenerations = std::stoull(option.substr(17));
++        } else if (!option.empty() && option[0] != '-') {
++            targetPath = option;
++        } else {
++            std::cerr << "Usage: " << argv[0]
++                      << " [-v|--verbose] [--max-generations N] [target-file]\n";
++            return 1;
++        }
++    }
+     std::vector<Target> targets;
+     if (!loadTargets(targetPath, targets)) {
+         std::cerr << "Could not load targets from " << targetPath << "\n";
+@@ -299,7 +334,7 @@ int main(int argc, char** argv) {
+                   << " | input: " << targets[index].inputBits
+                   << " | wanted output: " << targets[index].outputBits << "\n";
+         population = evolveCuda(context, targets[index].input,
+-                                 targets[index].output, index);
++                                 targets[index].output, index, maxGenerations);
+     }
+ 
+     destroyCudaTrainingContext(context);
