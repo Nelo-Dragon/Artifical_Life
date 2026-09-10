@@ -298,10 +298,29 @@ public:
             input.fill(15);
             wanted.fill(0);
         }
+        context = createCudaTrainingContext(population);
+        setCudaTrainingInput(context, bits(input));
         advance();
     }
 
+    ~Trainer() {
+        destroyCudaTrainingContext(context);
+    }
+
     void advance() {
+#ifdef USE_CUDA
+        const CudaEvaluation evaluation = stepCudaTraining(context, bits(wanted));
+        best.genome = {};
+        downloadCudaBestGenome(context, best.genome);
+        best.fitness = evaluation.fitness;
+        best.rankingFitness = evaluation.rankingFitness;
+        best.tiebreaker = evaluation.tiebreaker;
+        best.output = evaluation.output;
+        std::copy(std::begin(evaluation.fire), std::end(evaluation.fire), best.fire.begin());
+        std::copy(std::begin(evaluation.accu), std::end(evaluation.accu), best.accu.begin());
+        std::copy(std::begin(evaluation.thresh), std::end(evaluation.thresh), best.thresh.begin());
+        ++generation;
+#else
         const std::uint64_t target = bits(wanted);
         auto ranked = rankPopulation(population, target);
         best = ranked.front();
@@ -317,21 +336,30 @@ public:
             population.push_back(child);
         }
         ++generation;
+#endif
 
         if (usingPatterns && best.fitness == XS) {
             // Move on to the next wanted pattern, re-seeding the population
             // so a previous target's specialized genes cannot block
             // discovery of the next target's route (mirrors main.cpp).
             targetIndex = (targetIndex + 1) % patterns.size();
-            applyTarget();
+            destroyCudaTrainingContext(context);
+            context = nullptr;
             seedPopulation();
+            applyTarget();
+            context = createCudaTrainingContext(population);
+            setCudaTrainingInput(context, bits(input));
             generation = 0;
         }
     }
 
     void reset() {
         generation = 0;
-        population.assign(POPULATION_SIZE, best.genome);
+        destroyCudaTrainingContext(context);
+        context = nullptr;
+        seedPopulation();
+        context = createCudaTrainingContext(population);
+        setCudaTrainingInput(context, bits(input));
         advance();
     }
 
@@ -353,6 +381,12 @@ public:
 
 private:
     void applyInputToPopulation() {
+#ifdef USE_CUDA
+        if (context != nullptr) {
+            setCudaTrainingInput(context, bits(input));
+            return;
+        }
+#endif
         for (auto& genome : population)
             for (int index = 0; index < XS; ++index)
                 genome.inputs[index] = input[index];
@@ -383,6 +417,9 @@ private:
     std::vector<WantedPattern> patterns;
     std::size_t targetIndex = 0;
     bool usingPatterns = false;
+#ifdef USE_CUDA
+    CudaTrainingContext* context = nullptr;
+#endif
 };
 #else
 struct Genome {

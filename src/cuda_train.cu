@@ -217,6 +217,7 @@ std::vector<CudaGenome> evolve(std::vector<CudaGenome> population,
         } else {
             ++stagnantGenerations;
         }
+
         if (stagnantGenerations >= PLATEAU_GENERATIONS) {
             population.clear();
             population.push_back(ranked.front().genome);
@@ -243,6 +244,41 @@ std::vector<CudaGenome> evolve(std::vector<CudaGenome> population,
     }
 }
 
+std::vector<CudaGenome> evolveCuda(CudaTrainingContext* context,
+                                   std::uint64_t input,
+                                   std::uint64_t wantedOutput,
+                                   std::size_t targetIndex) {
+    std::size_t generation = 0;
+    std::size_t stagnantGenerations = 0;
+    float bestRankingFitness = -1.0f;
+    while (true) {
+        const CudaEvaluation best = stepCudaTraining(context, wantedOutput);
+        const std::uint64_t error = best.output ^ wantedOutput;
+        std::cout << (targetIndex + 1) << " : " << generation
+                  << " | " << gridBits(error)
+                  << " : " << gridBits(input)
+                  << " : " << gridBits(wantedOutput) << "\n";
+        if (best.fitness == CUDA_XS) {
+            std::vector<CudaGenome> population;
+            downloadCudaPopulation(context, population);
+            return population;
+        }
+        if (best.rankingFitness > bestRankingFitness) {
+            bestRankingFitness = best.rankingFitness;
+            stagnantGenerations = 0;
+        } else {
+            ++stagnantGenerations;
+        }
+        if (stagnantGenerations >= PLATEAU_GENERATIONS) {
+            CudaGenome bestGenome{};
+            downloadCudaBestGenome(context, bestGenome);
+            reseedCudaTraining(context, bestGenome, input);
+            stagnantGenerations = 0;
+        }
+        ++generation;
+    }
+}
+
 int main(int argc, char** argv) {
     const std::string targetPath = argc > 1 ? argv[1] : "wanted_outputs.txt";
     std::vector<Target> targets;
@@ -255,17 +291,18 @@ int main(int argc, char** argv) {
     std::vector<CudaGenome> population(POPULATION_SIZE);
     for (auto& genome : population)
         genome = randomGenome(random);
+    CudaTrainingContext* context = createCudaTrainingContext(population);
 
     for (std::size_t index = 0; index < targets.size(); ++index) {
-        for (auto& genome : population)
-            setInput(genome, targets[index].input);
+        setCudaTrainingInput(context, targets[index].input);
         std::cout << "Target " << index + 1 << "/" << targets.size()
                   << " | input: " << targets[index].inputBits
                   << " | wanted output: " << targets[index].outputBits << "\n";
-        population = evolve(std::move(population), targets[index].input,
-                            targets[index].output, random, index);
+        population = evolveCuda(context, targets[index].input,
+                                 targets[index].output, index);
     }
 
+    destroyCudaTrainingContext(context);
     std::cout << "Completed CUDA training for " << targets.size() << " targets.\n";
     return 0;
 }

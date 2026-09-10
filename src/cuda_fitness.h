@@ -34,3 +34,18 @@ struct CudaEvaluation {
 void evaluatePopulationCuda(const std::vector<CudaGenome>& hostGenomes,
                             std::uint64_t wantedOutput,
                             std::vector<CudaEvaluation>& hostEvaluations);
+
+struct CudaTrainingContext;
+
+CudaTrainingContext* createCudaTrainingContext(
+    const std::vector<CudaGenome>& initialPopulation);
+void destroyCudaTrainingContext(CudaTrainingContext* context);
+void setCudaTrainingInput(CudaTrainingContext* context, std::uint64_t input);
+CudaEvaluation stepCudaTraining(CudaTrainingContext* context,
+                                std::uint64_t wantedOutput);
+void downloadCudaPopulation(CudaTrainingContext* context,
+                            std::vector<CudaGenome>& population);
+void downloadCudaBestGenome(CudaTrainingContext* context, CudaGenome& genome);
+void reseedCudaTraining(CudaTrainingContext* context,
+                        const CudaGenome& best,
+                        std::uint64_t input);
