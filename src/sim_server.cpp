@@ -11,6 +11,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "Vchunk.h"
 #include "verilated.h"
@@ -51,6 +52,7 @@ void sendResponse(int client, const std::string& status,
     response << "HTTP/1.1 " << status << "\r\n"
              << "Content-Type: " << contentType << "\r\n"
              << "Content-Length: " << body.size() << "\r\n"
+             << "Access-Control-Allow-Origin: *\r\n"
              << "Cache-Control: no-store\r\n"
              << "Connection: close\r\n\r\n"
              << body;
@@ -95,6 +97,32 @@ struct Evaluation {
     double rankingFitness = 0.0;
     double tiebreaker = 0.0;
 };
+
+// One entry per cycle of the most recent evolve()'s winning genome, so the
+// frontend can show the min/avg-blended fitness function's actual per-cycle
+// behavior instead of only the single aggregated number.
+struct HistoryPoint {
+    int cycle;
+    bool warmup;
+    int fitness;
+    int falsePositives;
+    int misses;
+};
+std::vector<HistoryPoint> lastHistory;
+
+std::string historyJson() {
+    std::ostringstream json;
+    json << "{\"points\":[";
+    for (std::size_t index = 0; index < lastHistory.size(); ++index) {
+        const HistoryPoint& point = lastHistory[index];
+        if (index) json << ',';
+        json << "{\"cycle\":" << point.cycle << ",\"warmup\":" << (point.warmup ? "true" : "false")
+             << ",\"fitness\":" << point.fitness << ",\"false_positives\":" << point.falsePositives
+             << ",\"misses\":" << point.misses << '}';
+    }
+    json << "]}";
+    return json.str();
+}
 
 Score scoreOutput(std::uint64_t output, std::uint64_t wanted) {
     const std::uint64_t falsePositiveBits = output & ~wanted;
@@ -183,6 +211,13 @@ void loadGenome(Vchunk& top, const Genome& genome) {
     }
 }
 
+Genome defaultGenome() {
+    Genome genome;
+    genome.masks.fill(0b0100);
+    genome.sensitivities.fill(0);
+    return genome;
+}
+
 std::uint64_t wantedValue(const std::array<std::uint8_t, XS>& wanted) {
     std::uint64_t value = 0;
     for (int index = 0; index < XS; ++index)
@@ -191,7 +226,7 @@ std::uint64_t wantedValue(const std::array<std::uint8_t, XS>& wanted) {
 }
 
 Evaluation evaluateGenome(Vchunk& top, const Genome& genome,
-                          std::uint64_t wanted) {
+                          std::uint64_t wanted, std::vector<HistoryPoint>* history = nullptr) {
     loadGenome(top, genome);
     reset(top);
     const int warmupCycles = YS - 1;
@@ -200,12 +235,16 @@ Evaluation evaluateGenome(Vchunk& top, const Genome& genome,
     int scoredCycles = 0;
     double fitnessTotal = 0.0;
     double tiebreakerTotal = 0.0;
+    if (history) history->clear();
     for (int cycle = 0; cycle < EVOLUTION_CYCLES; ++cycle) {
         clockOnce(top);
+        const Score score = scoreOutput(static_cast<std::uint64_t>(top.out), wanted);
+        if (history)
+            history->push_back({cycle, cycle < warmupCycles, score.fitness,
+                                score.falsePositives, score.misses});
         if (cycle < warmupCycles)
             continue;
 
-        const Score score = scoreOutput(static_cast<std::uint64_t>(top.out), wanted);
         minimumFitness = std::min(minimumFitness, score.fitness);
         minimumError = std::min(minimumError, score.falsePositives + score.misses);
         double tiebreaker = 0.0;
@@ -264,7 +303,19 @@ int evolve(Vchunk& top, const std::array<std::uint8_t, XS>& wanted,
     }
     loadGenome(top, best);
     reset(top);
-    return evaluateGenome(top, best, target).fitness;
+    return evaluateGenome(top, best, target, &lastHistory).fitness;
+}
+
+// "Restart evolution": abandon whatever genome the hill-climb has been
+// refining and start over from the plain default genome (mask=4/south-pass,
+// sensitivity=0 for every neuron).
+int restartEvolution(Vchunk& top, const std::array<std::uint8_t, XS>& wanted,
+                     std::uint64_t& generation) {
+    const Genome seeded = defaultGenome();
+    generation = 0;
+    loadGenome(top, seeded);
+    reset(top);
+    return evaluateGenome(top, seeded, wantedValue(wanted), &lastHistory).fitness;
 }
 
 void handleClient(int client, Vchunk& top, std::uint64_t& step,
@@ -284,7 +335,26 @@ void handleClient(int client, Vchunk& top, std::uint64_t& step,
     const bool isGet = requestLine.rfind("GET ", 0) == 0;
     const bool isPost = requestLine.rfind("POST ", 0) == 0;
 
-    if (isGet && (requestLine.find("GET / ") == 0 || requestLine.find("GET /sim.html ") == 0)) {
+    if (isGet && (requestLine.find("GET / ") == 0 || requestLine.find("GET /index.html ") == 0)) {
+        const std::string page = readFile("web/index.html");
+        if (page.empty())
+            sendResponse(client, "500 Internal Server Error", "text/plain", "web/index.html not found");
+        else
+            sendResponse(client, "200 OK", "text/html; charset=utf-8", page);
+    } else if (isGet && requestLine.rfind("GET /docs/", 0) == 0) {
+        static const std::array<const char*, 4> allowedDocs = {"README", "CURRICULUM.md", "FITNESS.md", "FITNESS_FIXES.md"};
+        const std::size_t nameStart = std::string("GET /docs/").size();
+        const std::size_t nameEnd = requestLine.find(' ', nameStart);
+        const std::string name = requestLine.substr(nameStart, nameEnd - nameStart);
+        const bool allowed = std::find_if(allowedDocs.begin(), allowedDocs.end(),
+            [&](const char* candidate) { return name == candidate; }) != allowedDocs.end();
+        if (!allowed) {
+            sendResponse(client, "404 Not Found", "text/plain", "unknown document");
+        } else {
+            const std::string page = readFile(name);
+            sendResponse(client, page.empty() ? "404 Not Found" : "200 OK", "text/plain; charset=utf-8", page);
+        }
+    } else if (isGet && requestLine.find("GET /sim.html ") == 0) {
         const std::string page = readFile("web/sim.html");
         if (page.empty())
             sendResponse(client, "500 Internal Server Error", "text/plain", "web/sim.html not found");
@@ -292,6 +362,8 @@ void handleClient(int client, Vchunk& top, std::uint64_t& step,
             sendResponse(client, "200 OK", "text/html; charset=utf-8", page);
     } else if (isGet && requestLine.find("GET /api/state ") == 0) {
         sendResponse(client, "200 OK", "application/json", stateJson(top, step, wanted, mutationRate, generation, fitness));
+    } else if (isGet && requestLine.find("GET /api/history ") == 0) {
+        sendResponse(client, "200 OK", "application/json", historyJson());
     } else if (isPost && requestLine.find("POST /api/step ") == 0) {
         clockOnce(top);
         ++step;
@@ -338,6 +410,10 @@ void handleClient(int client, Vchunk& top, std::uint64_t& step,
     } else if (isPost && requestLine.find("POST /api/evolve ") == 0) {
         fitness = evolve(top, wanted, mutationRate, random);
         ++generation;
+        step = 0;
+        sendResponse(client, "200 OK", "application/json", stateJson(top, step, wanted, mutationRate, generation, fitness));
+    } else if (isPost && requestLine.find("POST /api/restart ") == 0) {
+        fitness = restartEvolution(top, wanted, generation);
         step = 0;
         sendResponse(client, "200 OK", "application/json", stateJson(top, step, wanted, mutationRate, generation, fitness));
     } else {

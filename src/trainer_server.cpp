@@ -77,6 +77,7 @@ void reply(int client, const char* status, const char* type, const std::string& 
     std::ostringstream response;
     response << "HTTP/1.1 " << status << "\r\nContent-Type: " << type
              << "\r\nContent-Length: " << body.size()
+             << "\r\nAccess-Control-Allow-Origin: *"
              << "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n" << body;
     const std::string data = response.str();
     send(client, data.data(), data.size(), 0);
@@ -615,7 +616,8 @@ private:
 #endif
 
 void handle(int client, Trainer& trainer, std::mutex& trainerMutex,
-            std::string& latestState, std::mutex& stateMutex) {
+            std::string& latestState, std::mutex& stateMutex,
+            std::atomic<double>& generationsPerSecond) {
     char buffer[4096];
     const ssize_t received = recv(client, buffer, sizeof(buffer) - 1, 0);
     if (received <= 0) return;
@@ -632,6 +634,21 @@ void handle(int client, Trainer& trainer, std::mutex& trainerMutex,
     if (get && line.find("GET /api/state ") == 0) {
         std::lock_guard<std::mutex> lock(stateMutex);
         reply(client, "200 OK", "application/json", latestState);
+        return;
+    }
+    if (get && line.find("GET /api/backend") == 0) {
+        std::ostringstream json;
+        json << "{\"backend\":\""
+#ifdef USE_CUDA
+             << "cuda"
+#else
+             << "cpu"
+#endif
+             << "\",\"population_size\":" << POPULATION_SIZE
+             << ",\"elite_count\":" << ELITE_COUNT
+             << ",\"xs\":" << XS << ",\"ys\":" << YS
+             << ",\"generations_per_second\":" << generationsPerSecond.load() << '}';
+        reply(client, "200 OK", "application/json", json.str());
         return;
     }
 
@@ -684,7 +701,10 @@ int main(int argc, char** argv) {
                                         trainer.wantedRef(), trainer.generationNumber(),
                                         trainer.targetNumber(), trainer.targetTotal());
     std::atomic<bool> keepTraining{true};
+    std::atomic<double> generationsPerSecond{0.0};
     std::thread trainerThread([&]() {
+        auto windowStart = std::chrono::steady_clock::now();
+        int windowCount = 0;
         while (keepTraining) {
             {
                 std::lock_guard<std::mutex> lock(trainerMutex);
@@ -694,6 +714,14 @@ int main(int argc, char** argv) {
                     trainer.generationNumber(), trainer.targetNumber(), trainer.targetTotal());
                 std::lock_guard<std::mutex> stateLock(stateMutex);
                 latestState = snapshot;
+            }
+            ++windowCount;
+            const auto now = std::chrono::steady_clock::now();
+            const double elapsed = std::chrono::duration<double>(now - windowStart).count();
+            if (elapsed >= 1.0) {
+                generationsPerSecond.store(windowCount / elapsed);
+                windowStart = now;
+                windowCount = 0;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
@@ -712,12 +740,12 @@ int main(int argc, char** argv) {
 #ifdef USE_CUDA
     while (true) {
         const int client = accept(server, nullptr, nullptr);
-        if (client >= 0) { handle(client, trainer, trainerMutex, latestState, stateMutex); close(client); }
+        if (client >= 0) { handle(client, trainer, trainerMutex, latestState, stateMutex, generationsPerSecond); close(client); }
     }
 #else
     while (!context.gotFinish()) {
         const int client = accept(server, nullptr, nullptr);
-        if (client >= 0) { handle(client, trainer, trainerMutex, latestState, stateMutex); close(client); }
+        if (client >= 0) { handle(client, trainer, trainerMutex, latestState, stateMutex, generationsPerSecond); close(client); }
     }
 #endif
     keepTraining = false;

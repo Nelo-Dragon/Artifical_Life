@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artificial Life observatory</title>
+<style>
+:root {
+  --ink: #e9eef2;
+  --muted: #8e9ba6;
+  --panel: #172025;
+  --panel-2: #202b30;
+  --line: #34434a;
+  --accent: #f2b84b;
+  --hot: #f06b4f;
+  --cool: #69c2b2;
+  --bad: #e05a5a;
+  --bg: #0d1215;
+}
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); background: radial-gradient(circle at 75% 0%, #27343a 0, var(--bg) 42%); font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; }
+button, input, select { font: inherit; }
+button { cursor: pointer; color: var(--ink); border: 1px solid var(--line); background: var(--panel-2); border-radius: 5px; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+a { color: var(--cool); }
+.shell { width: min(1500px, 100%); margin: auto; padding: 24px clamp(16px, 4vw, 56px) 60px; }
+h1 { margin: 0; font: 700 clamp(24px, 3.4vw, 40px)/1 Georgia, serif; }
+h2 { font: 700 20px Georgia, serif; margin: 0 0 6px; }
+h3 { font: 700 15px Georgia, serif; margin: 18px 0 6px; }
+p { color: var(--ink); }
+.kicker { color: var(--accent); text-transform: uppercase; letter-spacing: .14em; font-size: 11px; margin-bottom: 6px; }
+.muted { color: var(--muted); }
+.panel { background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 16px 35px #0003; padding: 18px; margin-bottom: 18px; }
+nav.tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 18px 0 22px; }
+nav.tabs button { padding: 9px 16px; }
+nav.tabs button.active { background: var(--accent); color: #18140b; border-color: var(--accent); font-weight: 700; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.badge.ok { background: color-mix(in srgb, var(--cool) 25%, transparent); color: var(--cool); border: 1px solid var(--cool); }
+.badge.bad { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); border: 1px solid var(--bad); }
+.badge.untrained { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); border: 1px solid var(--accent); }
+.layout-2col { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 18px; align-items: start; }
+#grid { display: grid; gap: 2px; padding: 8px; background: #0a0e10; border: 1px solid var(--line); border-radius: 5px; aspect-ratio: 2 / 1; }
+.grid-wrap { position: relative; }
+.fire-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.fire-arrow { fill: none; stroke: #9bd6c9; stroke-width: .55; stroke-linecap: round; stroke-dasharray: 1.5 2; opacity: 0; animation: signal-travel .48s ease-out forwards; }
+@keyframes signal-travel { 0% { opacity: 0; stroke-dashoffset: 3.5; } 20% { opacity: .78; } 100% { opacity: 0; stroke-dashoffset: 0; } }
+.edge-row { display: grid; grid-template-columns: repeat(var(--xs), minmax(0, 1fr)); gap: 3px; }
+.edge-bit { min-width: 0; padding: 5px 1px; color: var(--muted); background: #11191d; font-size: 10px; }
+.edge-bit.on { color: #17120a; background: var(--accent); border-color: var(--accent); }
+.edge-bit.output-on { color: #09201d; background: var(--cool); border-color: var(--cool); }
+.edge-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin: 12px 0 5px; }
+.cell { position: relative; min-width: 0; min-height: 0; border: 1px solid #29363b; background: linear-gradient(to top, var(--activation, #1a2529) 0%, var(--activation, #1a2529) var(--charge, 0%), #1a2529 var(--charge, 0%), #1a2529 100%); border-radius: 2px; transition: background .12s, border-color .12s, transform .12s; }
+.cell:hover { z-index: 2; transform: scale(1.7); border-color: var(--ink); }
+.cell.fire { background: var(--hot); border-color: #ffd08c; box-shadow: 0 0 12px #f06b4f99; }
+.cell.has-input { border-top: 3px solid var(--accent); }
+.cell.output { border-bottom-color: var(--cool); }
+.controls { display: grid; gap: 16px; }
+.control-group { display: grid; gap: 10px; }
+.actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.actions button { padding: 10px 8px; }
+.primary { background: var(--accent); color: #18140b; border-color: var(--accent); font-weight: 700; }
+.readout { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.readout div { padding: 10px; background: #11191d; border: 1px solid var(--line); border-radius: 5px; }
+.readout strong { display: block; font-size: 22px; color: var(--accent); }
+.readout span { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+#gene-panel { min-height: 110px; padding: 14px; background: #11191d; border: 1px solid var(--line); border-radius: 5px; }
+.gene-title { color: var(--accent); font-weight: 700; margin-bottom: 8px; }
+.gene-line { display: flex; justify-content: space-between; color: var(--muted); border-bottom: 1px solid #263238; padding: 3px 0; }
+.gene-line b { color: var(--ink); font-weight: 500; }
+.gene-edit { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+.gene-edit label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
+.gene-edit input, .gene-edit select { width: 100%; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 5px; }
+.gene-edit button { grid-column: 1 / -1; padding: 7px; }
+.legend { display: flex; gap: 14px; color: var(--muted); font-size: 11px; }
+.dot { display: inline-block; width: 8px; height: 8px; margin-right: 4px; border-radius: 2px; background: var(--hot); }
+.dot.input { background: var(--accent); }
+.dot.output { background: var(--cool); }
+canvas#history-chart { width: 100%; height: 160px; background: #0a0e10; border: 1px solid var(--line); border-radius: 5px; }
+.doc-links { display: flex; gap: 10px; flex-wrap: wrap; }
+.explainer { background: #11191d; border: 1px solid var(--line); border-radius: 5px; padding: 12px 14px; margin-bottom: 14px; }
+.explainer ol { margin: 6px 0 0 18px; padding: 0; }
+.topology-wrap { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 18px; }
+svg#topology { width: 100%; height: 220px; background: #0a0e10; border: 1px solid var(--line); border-radius: 5px; }
+.node-box { fill: #172025; stroke: var(--line); }
+.node-box.trained { stroke: var(--cool); }
+.node-box.untrained { stroke: var(--accent); stroke-dasharray: 4 3; }
+.node-label { fill: var(--ink); font: 12px ui-sans-serif, sans-serif; }
+.node-sub { fill: var(--muted); font: 9px ui-sans-serif, sans-serif; }
+.link-edge { stroke: var(--line); stroke-width: 2; marker-end: url(#topo-arrow); }
+.link-edge.active { stroke: var(--accent); }
+.phase-buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.phase-buttons button.active-phase { background: var(--accent); color: #18140b; border-color: var(--accent); }
+.stage-output { margin-bottom: 10px; }
+.stage-output .edge-label { margin: 0 0 4px; }
+.unreachable { color: var(--bad); padding: 10px; border: 1px dashed var(--bad); border-radius: 5px; }
+footer { color: var(--muted); font-size: 12px; margin-top: 30px; }
+@media (max-width: 900px) { .layout-2col, .topology-wrap { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div class="kicker">evolvable pulse-routing chunks · genetic algorithm</div>
+    <h1>Artificial Life observatory</h1>
+  </header>
+
+  <nav class="tabs">
+    <button data-tab="overview" class="active">What is this</button>
+    <button data-tab="fundamentals">Single chunk</button>
+    <button data-tab="evolution">Evolution</button>
+    <button data-tab="multichunk">Multi-chunk · C_LINK</button>
+  </nav>
+
+  <!-- ============================= OVERVIEW ============================= -->
+  <section id="tab-overview" class="tab-panel active">
+    <div class="panel">
+      <h2>In plain terms</h2>
+      <p>This project evolves small grids of simple, spiking "neurons" — each one just adds up
+      pulses from its neighbors, fires in a genetically-fixed direction once it crosses a
+      threshold, then rests for a cycle before it can fire again. A grid of these neurons is
+      called a <b>chunk</b>. Nothing is hand-programmed to route or "remember" anything: a
+      genetic algorithm randomly mutates each neuron's routing/threshold genes and keeps
+      whichever variant scores better against a target input→output task, generation after
+      generation.</p>
+      <p>The rest of this page is a live window into that system, reading real state from the
+      C++ / Verilog simulators running behind it — nothing here is a canned mockup.</p>
+      <ul>
+        <li><b>Single chunk</b>: watch one grid of neurons accumulate, fire, and rest; edit a
+        neuron's genes by hand and see the effect immediately.</li>
+        <li><b>Evolution</b>: run the genetic search and see the fitness function's actual
+        per-cycle behavior, not just one final number.</li>
+        <li><b>Multi-chunk · C_LINK</b>: the project's newer, in-progress direction — wiring
+        several chunks together (a memory chunk, an input chunk, a cortex chunk, an output
+        chunk) with the <code>C_LINK</code> interconnect primitive described in
+        <a href="/docs/CURRICULUM.md" target="_blank">CURRICULUM.md</a>. This section shows
+        exactly how far that wiring has actually progressed right now — including labeling any
+        chunk that hasn't been trained yet, rather than hiding it.</li>
+      </ul>
+      <h3>Further reading</h3>
+      <div class="doc-links">
+        <a href="/docs/README" target="_blank">README</a>
+        <a href="/docs/CURRICULUM.md" target="_blank">CURRICULUM.md (staged multi-chunk plan)</a>
+        <a href="/docs/FITNESS.md" target="_blank">FITNESS.md (scoring design)</a>
+        <a href="/docs/FITNESS_FIXES.md" target="_blank">FITNESS_FIXES.md</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================= FUNDAMENTALS ============================= -->
+  <section id="tab-fundamentals" class="tab-panel">
+    <div class="explainer">
+      <b>How one neuron works</b> — accumulate → fire → refractory:
+      <ol>
+        <li>Every cycle, a neuron adds any incoming pulses (from its N/E/S/W neighbors, plus an
+        external input row on the top edge) to its own charge.</li>
+        <li>Once that charge reaches its genetically-set threshold (1, 3, 5, or 7), it fires:
+        it emits a pulse toward whichever of its 4 directions its 4-bit "mask" gene selects, its
+        charge resets to 0, and only the <em>south</em>-firing bit reaches the grid's output
+        edge on the bottom row.</li>
+        <li>The cycle right after firing is a refractory period — it cannot accumulate or fire
+        again until the cycle after that.</li>
+      </ol>
+      Click any cell below to inspect and edit its mask/sensitivity genes.
+    </div>
+    <div class="layout-2col">
+      <section class="panel stage">
+        <div class="stage-head" style="display:flex;justify-content:space-between;align-items:center;">
+          <div><div class="label muted">Neuron field</div><div>North at top · south exits at bottom</div></div>
+          <div class="legend"><span><i class="dot"></i>fire</span><span><i class="dot input"></i>input</span><span><i class="dot output"></i>output</span></div>
+        </div>
+        <div class="edge-label"><span>Input edge · click to send a 4-bit pulse</span><span id="input-value">0 active</span></div>
+        <div id="input-row" class="edge-row"></div>
+        <div class="grid-wrap"><div id="grid"></div><svg id="fire-arrows" class="fire-arrows" viewBox="0 0 100 100" preserveAspectRatio="none"><defs><marker id="arrow-head" markerWidth="3.5" markerHeight="3.5" refX="3" refY="1.75" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L3.5,1.75 L0,3.5 Z" fill="#9bd6c9"></path></marker></defs></svg></div>
+        <div class="edge-label"><span>Output edge · south fires</span><span id="output-value">0 active</span></div>
+        <div id="output-row" class="edge-row"></div>
+        <div class="edge-label"><span>Wanted outcome · click to toggle target bits</span><span id="wanted-value">0 active</span></div>
+        <div id="wanted-row" class="edge-row"></div>
+      </section>
+      <aside class="panel controls">
+        <div class="control-group">
+          <div style="display:flex;justify-content:space-between;align-items:center;"><div class="label muted">Clock</div><strong id="step">0</strong></div>
+          <div class="actions"><button class="primary" id="step-button">Step</button><button id="realtime-toggle">Start realtime</button><button id="reset-button">Reset</button></div>
+          <label><span class="label muted">rate <output id="rate-value">8</output> Hz</span><input id="rate" type="range" min="1" max="30" value="8"></label>
+          <button id="clear-input">Clear input</button>
+        </div>
+        <div class="control-group">
+          <div class="label muted">Selected gene</div>
+          <div id="gene-panel">Click a cell to inspect its routing gene.</div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============================= EVOLUTION ============================= -->
+  <section id="tab-evolution" class="tab-panel">
+    <div class="explainer">
+      This runs a (1+λ) hill-climb over the <b>same chunk</b> shown in the Single chunk tab: each
+      generation mutates the current best genome ~24 ways, keeps whichever candidate scores
+      higher against the wanted-output row. Fitness blends the <b>worst</b> cycle in the
+      evaluation window (60%) with the <b>average</b> cycle (40%) — a worst-cycle floor so a
+      genome can't hide a bad cycle behind a couple of lucky ones — plus an accumulator-distance
+      tiebreaker when two genomes tie on integer fitness. The first <code>YS-1</code> cycles are
+      excluded as warm-up (pulses haven't reached the bottom row yet).
+    </div>
+    <div class="layout-2col">
+      <section class="panel">
+        <h2>Run evolution</h2>
+        <div class="actions" style="grid-template-columns:1fr 1fr 1fr;">
+          <button class="primary" id="evolve-button">Evolve one generation batch</button>
+          <button id="restart-evolution-button">Restart evolution</button>
+          <button id="evolve-reset-button">Reset chunk</button>
+        </div>
+        <p class="muted" style="margin-top:0;"><b>Restart evolution</b> throws away the genome the
+        hill-climb has been refining and loads a completely new chunk where every neuron is reset
+        to the plain default genome (mask=4/south-pass, sensitivity=0), resetting the generation
+        counter to 0.</p>
+        <div class="readout" style="margin-top:12px;">
+          <div><strong id="ev-generation">0</strong><span>generation</span></div>
+          <div><strong id="ev-fitness">0</strong><span>best fitness</span></div>
+          <div><strong id="ev-fp">0</strong><span>false positives</span></div>
+          <div><strong id="ev-misses">0</strong><span>misses</span></div>
+        </div>
+        <label style="display:block;margin-top:14px;"><span class="label muted">mutation rate <output id="mutation-value">4</output>%</span><input id="mutation" type="range" min="0" max="100" value="4"></label>
+        <h3>Per-cycle fitness of the last evolve run</h3>
+        <p class="muted" style="margin-top:0;">Warm-up cycles (excluded from scoring) are dimmed. This is exactly the
+        window <code>evaluateGenome()</code> scores — not just its final blended number.</p>
+        <canvas id="history-chart" width="600" height="160"></canvas>
+      </section>
+      <aside class="panel">
+        <h2>Trainers reachable</h2>
+        <p class="muted">This single-chunk demo runs its own tiny (1+λ) search inline. A separate,
+        always-on population trainer server (<code>trainer_server.cpp</code>) can run alongside it
+        on a different port, optionally on a CUDA backend. Below is what that server actually
+        reports right now — nothing is fabricated if it isn't reachable.</p>
+        <div id="trainer-status" class="muted">checking http://localhost:8081 ...</div>
+        <div class="readout" id="trainer-readout" style="display:none;margin-top:10px;">
+          <div><strong id="tr-backend">-</strong><span>backend</span></div>
+          <div><strong id="tr-generation">-</strong><span>generation</span></div>
+          <div><strong id="tr-fitness">-</strong><span>fitness</span></div>
+          <div><strong id="tr-gps">-</strong><span>gen/sec (measured)</span></div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ============================= MULTI-CHUNK ============================= -->
+  <section id="tab-multichunk" class="tab-panel">
+    <div class="explainer">
+      The staged curriculum in <a href="/docs/CURRICULUM.md" target="_blank">CURRICULUM.md</a>
+      trains four chunks — <b>input → memory → cortex → output</b> — and wires them with the
+      <code>C_LINK</code> primitive (an enable-gated, 1-bit-per-column pulse bus; see
+      <code>pipeline.v</code>). This tab talks to a live <code>pipeline_server</code> process
+      running the real Verilated <code>pipeline</code> module — the diagram and every bit shown
+      below reflect its actual current state, not a static drawing.
+    </div>
+    <div id="multichunk-body">
+      <div class="unreachable" id="multichunk-unreachable" style="display:none;">
+        Multi-chunk backend not reachable at <code>http://localhost:8082</code>.
+        Start it with <code>make pipeline-build &amp;&amp; ./obj_pipeline/pipeline_server</code>
+        (see Makefile target <code>pipeline-server</code>). The single-chunk tabs above work
+        independently of this server.
+      </div>
+      <div id="multichunk-live" style="display:none;">
+        <div class="topology-wrap">
+          <section class="panel">
+            <h2>Topology (live, generated from backend state)</h2>
+            <svg id="topology" viewBox="0 0 600 220"><defs><marker id="topo-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8e9ba6"></path></marker></defs></svg>
+            <div class="legend" style="margin-top:8px;">
+              <span><span class="badge ok">trained</span> genome loaded from genomes/*.genome</span>
+              <span><span class="badge untrained">untrained</span> default south-pass fallback</span>
+            </div>
+          </section>
+          <aside class="panel">
+            <h2>Phase control</h2>
+            <p class="muted" style="margin-top:0;">Mirrors the write / silence / probe harness
+            <code>curriculum_train.cpp</code> uses to drive this same <code>pipeline</code> module offline.</p>
+            <div class="phase-buttons">
+              <button data-phase="idle">Idle</button>
+              <button data-phase="write">Write</button>
+              <button data-phase="silence">Silence</button>
+              <button data-phase="probe">Probe</button>
+            </div>
+            <div class="actions" style="margin-top:10px;">
+              <button class="primary" id="pipe-step">Step</button>
+              <button id="pipe-auto">Start realtime</button>
+              <button id="pipe-reset">Reset</button>
+            </div>
+            <div class="readout" style="margin-top:10px;">
+              <div><strong id="pipe-step-count">0</strong><span>cycle</span></div>
+              <div><strong id="pipe-phase">idle</strong><span>phase</span></div>
+            </div>
+          </aside>
+        </div>
+        <section class="panel">
+          <h2>Drive row (input chunk's external input, active during Write)</h2>
+          <div id="pipe-drive-row" class="edge-row"></div>
+          <h3>Chunk outputs (south-firing bit per column, live)</h3>
+          <div class="stage-output"><div class="edge-label"><span>input chunk output</span></div><div id="pipe-input-out" class="edge-row"></div></div>
+          <div class="stage-output"><div class="edge-label"><span>memory chunk output</span></div><div id="pipe-memory-out" class="edge-row"></div></div>
+          <div class="stage-output"><div class="edge-label"><span>cortex chunk output</span></div><div id="pipe-cortex-out" class="edge-row"></div></div>
+          <div class="stage-output"><div class="edge-label"><span>output chunk output (final)</span></div><div id="pipe-output-out" class="edge-row"></div></div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <footer>Artificial Life · single-chunk API on :8080 (this page) · optional population
+  trainer on :8081 · optional multi-chunk pipeline on :8082.</footer>
+</main>
+<script>
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
+
+// ---------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------
+$$('.tabs button').forEach((button) => {
+  button.addEventListener('click', () => {
+    $$('.tabs button').forEach((b) => b.classList.remove('active'));
+    button.classList.add('active');
+    $$('.tab-panel').forEach((panel) => panel.classList.remove('active'));
+    $(`#tab-${button.dataset.tab}`).classList.add('active');
+  });
+});
+
+// ---------------------------------------------------------------------
+// Single-chunk fundamentals + evolution (same backend chunk, port 8080)
+// ---------------------------------------------------------------------
+let state = null;
+let selectedGene = null;
+let realtimeTimer = null;
+
+async function request(path, options = {}) {
+  const response = await fetch(path, options);
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+function bits(value, width) { return value.toString(2).padStart(width, '0'); }
+
+function render(next) {
+  state = next;
+  document.documentElement.style.setProperty('--xs', state.xs);
+  $('#step').textContent = state.step;
+  $('#ev-generation').textContent = state.generation;
+  $('#ev-fitness').textContent = state.fitness;
+  $('#ev-fp').textContent = state.false_positives;
+  $('#ev-misses').textContent = state.misses;
+  $('#mutation').value = Math.round(state.mutation_rate * 100);
+  $('#mutation-value').textContent = Math.round(state.mutation_rate * 100);
+
+  const grid = $('#grid');
+  grid.style.gridTemplateColumns = `repeat(${state.xs}, minmax(0, 1fr))`;
+  grid.replaceChildren();
+  state.fire.forEach((fire, index) => {
+    const cell = document.createElement('button');
+    const x = index % state.xs;
+    const y = Math.floor(index / state.xs);
+    const threshold = state.thresh[index];
+    const charge = threshold ? Math.min(100, (state.accu[index] / threshold) * 100) : 0;
+    cell.className = 'cell' + (fire ? ' fire' : '') + (state.input[x] && y === 0 ? ' has-input' : '') + (y === state.ys - 1 ? ' output' : '');
+    cell.style.setProperty('--charge', `${charge}%`);
+    cell.style.setProperty('--activation', charge >= 100 ? '#f2b84b' : '#69a99e');
+    cell.title = `Neuron ${index} (${x}, ${y})\nmask N E S W: ${bits(state.mask[index], 4)}\nsensitivity: ${state.sens[index]} / threshold ${threshold}\nactivation: ${state.accu[index]} / ${threshold}\nfire N E S W: ${bits(fire, 4)}`;
+    cell.addEventListener('click', () => showGene(index));
+    grid.appendChild(cell);
+  });
+  renderFireArrows();
+  renderEdge('input-row', state.input, 'input', setInput);
+  renderEdge('output-row', state.output, 'output', null);
+  renderEdge('wanted-row', state.wanted, 'wanted', setWanted);
+}
+function renderFireArrows() {
+  const svg = $('#fire-arrows');
+  svg.querySelectorAll('.fire-arrow').forEach((arrow) => arrow.remove());
+  const directions = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+  state.fire.forEach((fire, index) => {
+    const x = index % state.xs;
+    const y = Math.floor(index / state.xs);
+    for (let bit = 0; bit < directions.length; bit++) {
+      if (!(fire & (1 << bit))) continue;
+      const [dx, dy] = directions[bit];
+      const targetX = x + dx, targetY = y + dy;
+      if (targetX < 0 || targetX >= state.xs || targetY < 0 || targetY >= state.ys) continue;
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.classList.add('fire-arrow');
+      line.setAttribute('x1', ((x + .5) / state.xs) * 100);
+      line.setAttribute('y1', ((y + .5) / state.ys) * 100);
+      line.setAttribute('x2', ((targetX + .5) / state.xs) * 100);
+      line.setAttribute('y2', ((targetY + .5) / state.ys) * 100);
+      line.setAttribute('marker-end', 'url(#arrow-head)');
+      svg.appendChild(line);
+    }
+  });
+}
+function showGene(index) {
+  selectedGene = index;
+  const x = index % state.xs, y = Math.floor(index / state.xs);
+  const fire = bits(state.fire[index], 4);
+  $('#gene-panel').innerHTML = `<div class="gene-title">Neuron ${index} · (${x}, ${y})</div><div class="gene-line"><span>mask / N E S W</span><b>${bits(state.mask[index], 4)}</b></div><div class="gene-line"><span>sensitivity</span><b>${state.sens[index]} / threshold ${state.thresh[index]}</b></div><div class="gene-line"><span>activation</span><b>${state.accu[index]} / ${state.thresh[index]}</b></div><div class="gene-line"><span>fire pulse / N E S W</span><b>${fire}</b></div><div class="gene-edit"><label>mask (0-15)<input id="gene-mask" type="number" min="0" max="15" value="${state.mask[index]}"></label><label>sensitivity<select id="gene-sens"><option value="0">0 / 1</option><option value="1">1 / 3</option><option value="2">2 / 5</option><option value="3">3 / 7</option></select></label><button id="apply-gene">Apply gene</button></div>`;
+  $('#gene-sens').value = state.sens[index];
+  $('#apply-gene').addEventListener('click', applySelectedGene);
+}
+async function applySelectedGene() {
+  if (selectedGene === null) return;
+  const mask = Math.max(0, Math.min(15, Number($('#gene-mask').value)));
+  const sens = Number($('#gene-sens').value);
+  render(await request(`/api/gene?index=${selectedGene}&mask=${mask}&sens=${sens}`, {method: 'POST'}));
+  showGene(selectedGene);
+}
+function renderEdge(id, values, kind, setter) {
+  const row = $(`#${id}`);
+  row.replaceChildren();
+  let active = 0;
+  values.forEach((value, index) => {
+    const button = document.createElement('button');
+    if (value) active++;
+    button.className = 'edge-bit' + (value ? ` ${kind === 'output' ? 'output-on' : 'on'}` : '');
+    button.textContent = value ? '1' : '0';
+    button.title = `${kind} ${index}: ${value}`;
+    if (setter) button.addEventListener('click', () => setter(index, value ? 0 : 1));
+    row.appendChild(button);
+  });
+  const readout = $(`#${kind}-value`);
+  if (readout) readout.textContent = `${active} active`;
+}
+async function setInput(index, value) { render(await request(`/api/input?index=${index}&value=${value}`, {method: 'POST'})); }
+async function setWanted(index, value) { render(await request(`/api/wanted?index=${index}&value=${value}`, {method: 'POST'})); }
+async function step() { render(await request('/api/step', {method: 'POST'})); }
+function restartTimer() {
+  clearInterval(realtimeTimer);
+  const on = $('#realtime-toggle').dataset.on === '1';
+  realtimeTimer = on ? setInterval(step, 1000 / Number($('#rate').value)) : null;
+}
+$('#step-button').addEventListener('click', step);
+$('#realtime-toggle').addEventListener('click', () => {
+  const button = $('#realtime-toggle');
+  const on = button.dataset.on === '1';
+  button.dataset.on = on ? '0' : '1';
+  button.textContent = on ? 'Start realtime' : 'Stop realtime';
+  restartTimer();
+});
+$('#rate').addEventListener('input', () => { $('#rate-value').textContent = $('#rate').value; restartTimer(); });
+$('#reset-button').addEventListener('click', async () => render(await request('/api/reset', {method: 'POST'})));
+$('#evolve-reset-button').addEventListener('click', async () => render(await request('/api/reset', {method: 'POST'})));
+$('#clear-input').addEventListener('click', async () => { for (let index = 0; index < state.xs; index++) await setInput(index, 0); });
+$('#mutation').addEventListener('input', () => { $('#mutation-value').textContent = $('#mutation').value; });
+$('#mutation').addEventListener('change', async () => render(await request(`/api/mutation?value=${Number($('#mutation').value) / 100}`, {method: 'POST'})));
+
+$('#evolve-button').addEventListener('click', async () => {
+  const button = $('#evolve-button');
+  button.disabled = true;
+  button.textContent = 'Searching...';
+  try {
+    render(await request('/api/evolve', {method: 'POST'}));
+    await loadHistory();
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Evolve one generation batch';
+  }
+});
+$('#restart-evolution-button').addEventListener('click', async () => {
+  const button = $('#restart-evolution-button');
+  button.disabled = true;
+  button.textContent = 'Restarting...';
+  try {
+    render(await request('/api/restart', {method: 'POST'}));
+    await loadHistory();
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Restart evolution';
+  }
+});
+
+async function loadHistory() {
+  const history = await request('/api/history');
+  drawHistory(history.points);
+}
+function drawHistory(points) {
+  const canvas = $('#history-chart');
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width, height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+  if (!points || points.length === 0) {
+    ctx.fillStyle = '#8e9ba6';
+    ctx.fillText('Run Evolve to populate this chart.', 10, height / 2);
+    return;
+  }
+  const maxFitness = Math.max(1, ...points.map((point) => point.fitness));
+  const barWidth = width / points.length;
+  points.forEach((point, index) => {
+    const x = index * barWidth;
+    const barHeight = (point.fitness / maxFitness) * (height - 20);
+    ctx.fillStyle = point.warmup ? '#34434a' : '#f2b84b';
+    ctx.fillRect(x + 1, height - barHeight - 14, barWidth - 2, barHeight);
+    ctx.fillStyle = point.warmup ? '#546069' : '#e05a5a';
+    const errHeight = ((point.false_positives + point.misses) / maxFitness) * 10;
+    ctx.fillRect(x + 1, height - 12, barWidth - 2, errHeight);
+  });
+  ctx.fillStyle = '#8e9ba6';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('bars: fitness this cycle (dim = warm-up, excluded from scoring)   thin bottom bar: false positives + misses', 4, 12);
+}
+
+// ---------------------------------------------------------------------
+// Trainer server comparison (port 8081), optional/cross-origin
+// ---------------------------------------------------------------------
+async function pollTrainer() {
+  try {
+    const [backend, trainerState] = await Promise.all([
+      fetch('http://localhost:8081/api/backend').then((r) => r.json()),
+      fetch('http://localhost:8081/api/state').then((r) => r.json()),
+    ]);
+    $('#trainer-status').textContent = 'Reachable at http://localhost:8081';
+    $('#trainer-readout').style.display = '';
+    $('#tr-backend').textContent = backend.backend.toUpperCase();
+    $('#tr-generation').textContent = trainerState.generation;
+    $('#tr-fitness').textContent = trainerState.fitness;
+    $('#tr-gps').textContent = backend.generations_per_second.toFixed(1);
+  } catch (error) {
+    $('#trainer-status').textContent = 'Not reachable at http://localhost:8081 (start with `make train`).';
+    $('#trainer-readout').style.display = 'none';
+  }
+}
+setInterval(pollTrainer, 3000);
+pollTrainer();
+
+// ---------------------------------------------------------------------
+// Multi-chunk / C_LINK (port 8082), optional/cross-origin
+// ---------------------------------------------------------------------
+const PIPE = 'http://localhost:8082';
+let pipeReachable = false;
+let pipeAutoTimer = null;
+
+function drawTopology(topology) {
+  const svg = $('#topology');
+  svg.querySelectorAll(':not(defs)').forEach((node) => node.remove());
+  const positions = { input: [80, 40], memory: [80, 160], cortex: [320, 160], output: [520, 160] };
+  const svgns = 'http://www.w3.org/2000/svg';
+  topology.edges.forEach((edge) => {
+    const [x1, y1] = positions[edge.from];
+    const [x2, y2] = positions[edge.to];
+    const line = document.createElementNS(svgns, 'line');
+    line.setAttribute('x1', x1 + 60); line.setAttribute('y1', y1);
+    line.setAttribute('x2', x2 - 60); line.setAttribute('y2', y2);
+    line.setAttribute('class', 'link-edge');
+    line.dataset.enableSignal = edge.enable_signal;
+    svg.appendChild(line);
+    const label = document.createElementNS(svgns, 'text');
+    label.setAttribute('x', (x1 + x2) / 2); label.setAttribute('y', (y1 + y2) / 2 - 6);
+    label.setAttribute('class', 'node-sub'); label.setAttribute('text-anchor', 'middle');
+    label.textContent = 'C_LINK';
+    svg.appendChild(label);
+  });
+  topology.nodes.forEach((node) => {
+    const [x, y] = positions[node.id];
+    const rect = document.createElementNS(svgns, 'rect');
+    rect.setAttribute('x', x - 55); rect.setAttribute('y', y - 22);
+    rect.setAttribute('width', 110); rect.setAttribute('height', 44);
+    rect.setAttribute('rx', 6);
+    rect.setAttribute('class', 'node-box ' + (node.trained ? 'trained' : 'untrained'));
+    svg.appendChild(rect);
+    const label = document.createElementNS(svgns, 'text');
+    label.setAttribute('x', x); label.setAttribute('y', y - 2);
+    label.setAttribute('class', 'node-label'); label.setAttribute('text-anchor', 'middle');
+    label.textContent = node.label;
+    svg.appendChild(label);
+    const sub = document.createElementNS(svgns, 'text');
+    sub.setAttribute('x', x); sub.setAttribute('y', y + 14);
+    sub.setAttribute('class', 'node-sub'); sub.setAttribute('text-anchor', 'middle');
+    sub.textContent = node.trained ? 'trained' : 'untrained (default)';
+    svg.appendChild(sub);
+  });
+}
+function highlightActiveLinks(pipeState) {
+  const active = {
+    link_in_to_mem_en: pipeState.link_in_to_mem,
+    link_mem_to_cortex_en: pipeState.link_mem_to_cortex,
+    link_cortex_to_out_en: pipeState.link_cortex_to_out,
+  };
+  $$('#topology .link-edge').forEach((line) => {
+    line.classList.toggle('active', !!active[line.dataset.enableSignal]);
+  });
+}
+function renderPipeState(pipeState) {
+  $('#pipe-step-count').textContent = pipeState.step;
+  $('#pipe-phase').textContent = pipeState.phase;
+  $$('.phase-buttons button').forEach((button) => button.classList.toggle('active-phase', button.dataset.phase === pipeState.phase));
+  document.documentElement.style.setProperty('--xs', pipeState.xs);
+  renderPipeRow('pipe-drive-row', pipeState.drive, 'on', setDrive);
+  renderPipeRow('pipe-input-out', pipeState.input_out, 'output-on', null);
+  renderPipeRow('pipe-memory-out', pipeState.memory_out, 'output-on', null);
+  renderPipeRow('pipe-cortex-out', pipeState.cortex_out, 'output-on', null);
+  renderPipeRow('pipe-output-out', pipeState.output_out, 'output-on', null);
+  highlightActiveLinks(pipeState);
+}
+async function setDrive(index, value) {
+  const pipeState = await fetch(`${PIPE}/api/drive?index=${index}&value=${value ? 15 : 0}`, {method: 'POST'}).then((r) => r.json());
+  renderPipeState(pipeState);
+}
+function renderPipeRow(id, values, onClass, setter) {
+  const row = $(`#${id}`);
+  row.replaceChildren();
+  values.forEach((value, index) => {
+    const button = document.createElement('button');
+    button.className = 'edge-bit' + (value ? ` ${onClass}` : '');
+    button.textContent = value ? '1' : '0';
+    button.title = `${id} ${index}: ${value}`;
+    if (setter) button.addEventListener('click', () => setter(index, value ? 0 : 1));
+    row.appendChild(button);
+  });
+}
+async function pipeStep() { renderPipeState(await fetch(`${PIPE}/api/step`, {method: 'POST'}).then((r) => r.json())); }
+$('#pipe-step').addEventListener('click', pipeStep);
+$('#pipe-reset').addEventListener('click', async () => renderPipeState(await fetch(`${PIPE}/api/reset`, {method: 'POST'}).then((r) => r.json())));
+$('#pipe-auto').addEventListener('click', () => {
+  const button = $('#pipe-auto');
+  const on = button.dataset.on === '1';
+  button.dataset.on = on ? '0' : '1';
+  button.textContent = on ? 'Start realtime' : 'Stop realtime';
+  clearInterval(pipeAutoTimer);
+  pipeAutoTimer = on ? null : setInterval(pipeStep, 200);
+});
+$$('.phase-buttons button').forEach((button) => {
+  button.addEventListener('click', async () => renderPipeState(await fetch(`${PIPE}/api/phase?value=${button.dataset.phase}`, {method: 'POST'}).then((r) => r.json())));
+});
+
+async function initMultichunk() {
+  try {
+    const topology = await fetch(`${PIPE}/api/topology`).then((r) => r.json());
+    const pipeState = await fetch(`${PIPE}/api/state`).then((r) => r.json());
+    pipeReachable = true;
+    $('#multichunk-unreachable').style.display = 'none';
+    $('#multichunk-live').style.display = '';
+    drawTopology(topology);
+    renderPipeState(pipeState);
+  } catch (error) {
+    pipeReachable = false;
+    $('#multichunk-unreachable').style.display = '';
+    $('#multichunk-live').style.display = 'none';
+  }
+}
+setInterval(() => { if (!pipeReachable) initMultichunk(); }, 4000);
+initMultichunk();
+
+// Initial load
+request('/api/state').then(render).then(loadHistory);
+</script>
+</body>
+</html>

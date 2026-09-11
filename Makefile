@@ -25,7 +25,7 @@ MAIN_YS ?= 8
 SIM_TARGET = sim_server
 TRAIN_TARGET = trainer_server
 SIM_XS ?= 4
-SIM_YS ?= 8
+SIM_YS ?= 4
 TRAIN_XS ?= 4
 TRAIN_YS ?= 8
 CUDA_ARCH ?= sm_89
@@ -86,7 +86,13 @@ TRAIN_VERILATOR_FLAGS = -Wall --cc \
 				  -CFLAGS "-DSIM_XS=$(TRAIN_XS) -DSIM_YS=$(TRAIN_YS)" \
 				  -o $(TRAIN_TARGET)
 
-.PHONY: all run sim sim-build train train-build clean cuda cuda-train cuda-train-server curriculum curriculum-build fpga-lint fpga-synth
+PIPE_XS ?= 4
+PIPE_YS ?= 8
+PIPELINE_BUILD_DIR = obj_pipeline
+PIPELINE_TARGET = pipeline_server
+PIPELINE_CPP_SRC = $(SRC_DIR)/pipeline_server.cpp
+
+.PHONY: all run sim sim-build train train-build clean cuda cuda-train cuda-train-server curriculum curriculum-build fpga-lint fpga-synth pipeline-build pipeline-server
 
 all:
 	$(VERILATOR) $(VERILATOR_FLAGS)
@@ -108,7 +114,27 @@ train:
 	./$(TRAIN_BUILD_DIR)/$(TRAIN_TARGET)
 
 clean:
-	rm -rf $(BUILD_DIR) $(SIM_BUILD_DIR) $(TRAIN_BUILD_DIR) $(CURRICULUM_BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(SIM_BUILD_DIR) $(TRAIN_BUILD_DIR) $(CURRICULUM_BUILD_DIR) $(PIPELINE_BUILD_DIR)
+
+pipeline-build:
+	mkdir -p $(PIPELINE_BUILD_DIR)
+	$(VERILATOR) -Wall --cc $(VERILOG_SRCS) --top-module pipeline \
+		-GXS=$(PIPE_XS) -GYS=$(PIPE_YS) -I$(SRC_DIR) \
+		--Mdir $(PIPELINE_BUILD_DIR)
+	$(MAKE) -C $(PIPELINE_BUILD_DIR) -f Vpipeline.mk Vpipeline__ALL.a verilated.o verilated_threads.o
+	$(CXX) -std=c++17 -O2 -Wall \
+		-DPIPE_XS=$(PIPE_XS) -DPIPE_YS=$(PIPE_YS) \
+		-I$(VERILATOR_ROOT)/include -I$(VERILATOR_ROOT)/include/vltstd \
+		-I$(PIPELINE_BUILD_DIR) \
+		$(PIPELINE_CPP_SRC) \
+		$(PIPELINE_BUILD_DIR)/Vpipeline__ALL.a \
+		$(PIPELINE_BUILD_DIR)/verilated.o \
+		$(PIPELINE_BUILD_DIR)/verilated_threads.o \
+		-lpthread -latomic \
+		-o $(PIPELINE_BUILD_DIR)/$(PIPELINE_TARGET)
+
+pipeline-server: pipeline-build
+	./$(PIPELINE_BUILD_DIR)/$(PIPELINE_TARGET)
 
 cuda:
 	mkdir -p $(BUILD_DIR)

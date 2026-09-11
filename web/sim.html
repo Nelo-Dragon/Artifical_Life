@@ -91,7 +91,7 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
       <div id="wanted-row" class="edge-row" aria-label="Wanted outcome"></div>
     </section>
     <aside class="panel controls">
-      <div class="control-group"><div class="control-head"><div class="label">Clock</div><strong id="step">0</strong></div><div class="actions"><button class="primary" id="step-button">Step</button><button id="evolve-button">Evolve</button><button id="reset-button">Reset</button></div><label><input id="realtime" type="checkbox"> realtime</label><label><span class="label">rate <output id="rate-value">8</output> Hz</span><input id="rate" type="range" min="1" max="30" value="8"></label><div class="readout"><div><strong id="generation">0</strong><span>generation</span></div><div><strong id="fitness">0</strong><span>best fitness</span></div><div><strong id="false-positives">0</strong><span>false positives</span></div><div><strong id="misses">0</strong><span>misses</span></div></div></div>
+      <div class="control-group"><div class="control-head"><div class="label">Clock</div><strong id="step">0</strong></div><div class="actions"><button class="primary" id="step-button">Step</button><button id="evolve-button">Evolve</button><button id="reset-button">Reset</button></div><div class="actions"><button id="restart-evolution-button">Restart evolution</button></div><label><input id="realtime" type="checkbox"> realtime</label><label><span class="label">rate <output id="rate-value">8</output> Hz</span><input id="rate" type="range" min="1" max="30" value="8"></label><div class="readout"><div><strong id="generation">0</strong><span>generation</span></div><div><strong id="fitness">0</strong><span>best fitness</span></div><div><strong id="false-positives">0</strong><span>false positives</span></div><div><strong id="misses">0</strong><span>misses</span></div></div></div>
       <div class="control-group"><div class="label">Evolution settings</div><label><span class="label">mutation rate <output id="mutation-value">4</output>%</span><input id="mutation" type="range" min="0" max="100" value="4"></label><div class="label">Stored for the trainer; inactive in this single-chunk run.</div><button id="clear-input">Clear input</button></div>
       <div class="control-group"><div class="label">Selected gene</div><div id="gene-panel">Hover a cell to inspect its routing gene.</div></div>
     </aside>
@@ -238,6 +238,7 @@ $('#evolve-button').addEventListener('click', async () => {
   button.textContent = 'Evolve';
 });
 $('#reset-button').addEventListener('click', async () => render(await request('/api/reset', {method: 'POST'})));
+$('#restart-evolution-button').addEventListener('click', async () => render(await request('/api/restart', {method: 'POST'})));
 $('#clear-input').addEventListener('click', async () => { for (let index = 0; index < state.xs; index++) await setInput(index, 0); });
 $('#realtime').addEventListener('change', restartTimer);
 $('#rate').addEventListener('input', () => { $('#rate-value').textContent = $('#rate').value; restartTimer(); });
