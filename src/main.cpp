@@ -17,8 +17,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "Vchunk.h"
-#include "verilated.h"
+#include "native_chunk.h"
 
 #ifndef MAIN_XS
 #define MAIN_XS 8
@@ -35,6 +34,19 @@ constexpr int SIMULATION_CYCLES = 32;
 constexpr double MUTATION_RATE = 0.04;
 constexpr double MIN_FITNESS_WEIGHT = 0.6;
 constexpr double AVERAGE_FITNESS_WEIGHT = 0.4;
+constexpr unsigned MAX_EVALUATION_WORKERS = 16;
+
+enum class EvolutionStrategy {
+    GeneticAlgorithm,
+    MuPlusLambda
+};
+
+struct EvolutionConfig {
+    EvolutionStrategy strategy = EvolutionStrategy::GeneticAlgorithm;
+    std::size_t mu = 32;
+    std::size_t lambda = POPULATION_SIZE - 32;
+    int mutationGenes = 2;
+};
 
 struct ChunkGenome {
     std::array<std::uint8_t, NEURON_COUNT> masks{};
@@ -318,6 +330,22 @@ void mutateGenome(ChunkGenome& genome, std::mt19937& random) {
     }
 }
 
+void mutateDiscrete(ChunkGenome& genome, int mutationGenes,
+                    std::mt19937& random) {
+    std::uniform_int_distribution<int> neuron(0, NEURON_COUNT - 1);
+    std::uniform_int_distribution<int> mask(0, 15);
+    std::uniform_int_distribution<int> sensitivity(0, 3);
+    std::bernoulli_distribution mutateMask(0.5);
+    for (int mutation = 0; mutation < mutationGenes; ++mutation) {
+        const int index = neuron(random);
+        if (mutateMask(random))
+            genome.masks[index] = static_cast<std::uint8_t>(mask(random));
+        else
+            genome.sensitivities[index] =
+                static_cast<std::uint8_t>(sensitivity(random));
+    }
+}
+
 ChunkGenome crossover(const ChunkGenome& first, const ChunkGenome& second,
                       std::mt19937& random) {
     ChunkGenome child;
@@ -335,23 +363,9 @@ ChunkGenome crossover(const ChunkGenome& first, const ChunkGenome& second,
 
 EvaluatedGenome evaluateGenome(const ChunkGenome& genome,
                                std::uint64_t wantedOutput) {
-    auto top = std::make_unique<Vchunk>();
-    top->clk = 0;
-    top->rst = 1;
-
-    for (int index = 0; index < NEURON_COUNT; ++index) {
-        top->mask_msk[index] = genome.masks[index];
-        top->sens_msk[index] = genome.sensitivities[index];
-    }
-    for (int index = 0; index < XS; ++index)
-        top->in[index] = genome.inputs[index];
-
-    top->eval();
-    top->clk = 1;
-    top->eval();
-    top->clk = 0;
-    top->eval();
-    top->rst = 0;
+    NativeChunk<XS, YS> top;
+    top.load(genome.masks, genome.sensitivities);
+    top.reset();
 
     EvaluatedGenome evaluated{genome};
     const int warmupCycles = YS - 1;
@@ -362,12 +376,9 @@ EvaluatedGenome evaluateGenome(const ChunkGenome& genome,
     double fitnessTotal = 0.0;
     double tiebreakerTotal = 0.0;
     for (int cycle = 0; cycle < SIMULATION_CYCLES; ++cycle) {
-        top->clk = 1;
-        top->eval();
-        top->clk = 0;
-        top->eval();
+        top.step(genome.inputs);
 
-        const std::uint64_t output = top->out;
+        const std::uint64_t output = top.output();
         if (cycle < warmupCycles)
             continue;
 
@@ -376,8 +387,8 @@ EvaluatedGenome evaluateGenome(const ChunkGenome& genome,
         double tiebreaker = 0.0;
         for (int x = 0; x < XS; ++x) {
             const int index = (YS - 1) * XS + x;
-            const int threshold = top->thresh_msk[index];
-            const int accumulator = top->accu_msk[index];
+            const int threshold = top.thresholdAt(index);
+            const int accumulator = top.accumulator()[index];
             const bool wanted = ((wantedOutput >> x) & 1) != 0;
             tiebreaker += wanted ? threshold - accumulator : accumulator;
         }
@@ -388,9 +399,9 @@ EvaluatedGenome evaluateGenome(const ChunkGenome& genome,
             bestTiebreaker = tiebreaker;
             evaluated.output = output;
             for (int index = 0; index < NEURON_COUNT; ++index) {
-                evaluated.fire[index] = top->fire_msk[index];
-                evaluated.accu[index] = top->accu_msk[index];
-                evaluated.thresh[index] = top->thresh_msk[index];
+                evaluated.fire[index] = top.fired()[index];
+                evaluated.accu[index] = top.accumulator()[index];
+                evaluated.thresh[index] = top.thresholdAt(index);
             }
         }
         fitnessTotal += fitness;
@@ -410,9 +421,9 @@ std::vector<EvaluatedGenome> evolve(std::vector<ChunkGenome> pool,
                                     std::uint64_t inputPattern,
                                     std::mt19937& random,
                                     std::size_t targetIndex,
-                                    std::size_t targetCount) {
+                                    std::size_t targetCount,
+                                    const EvolutionConfig& config) {
     std::vector<EvaluatedGenome> evaluated;
-    std::uniform_int_distribution<std::size_t> parent(0, ELITE_COUNT - 1);
 
     std::size_t generation = 0;
     while (true) {
@@ -423,7 +434,8 @@ std::vector<EvaluatedGenome> evolve(std::vector<ChunkGenome> pool,
             1u,
             std::min<unsigned>(
                 static_cast<unsigned>(pool.size()),
-                std::thread::hardware_concurrency()));
+                std::min<unsigned>(MAX_EVALUATION_WORKERS,
+                                   std::thread::hardware_concurrency())));
         std::atomic<std::size_t> nextGenome{0};
         std::vector<std::thread> workers;
         workers.reserve(workerCount);
@@ -459,17 +471,32 @@ std::vector<EvaluatedGenome> evolve(std::vector<ChunkGenome> pool,
         if (evaluated.front().fitness == XS)
             break;
 
-        pool.clear();
-        for (std::size_t index = 0; index < ELITE_COUNT; ++index)
-            pool.push_back(evaluated[index].genome);
+        const std::size_t eliteCount = config.strategy == EvolutionStrategy::MuPlusLambda
+            ? config.mu
+            : ELITE_COUNT;
+        std::uniform_int_distribution<std::size_t> parent(0, eliteCount - 1);
+        std::vector<ChunkGenome> nextPool;
+        const std::size_t offspringCount = config.strategy == EvolutionStrategy::MuPlusLambda
+            ? config.lambda
+            : POPULATION_SIZE - eliteCount;
+        nextPool.reserve(eliteCount + offspringCount);
+        for (std::size_t index = 0; index < eliteCount; ++index)
+            nextPool.push_back(evaluated[index].genome);
 
-        while (pool.size() < POPULATION_SIZE) {
-            const auto& first = evaluated[parent(random)].genome;
-            const auto& second = evaluated[parent(random)].genome;
-            ChunkGenome child = crossover(first, second, random);
-            mutateGenome(child, random);
-            pool.push_back(child);
+        while (nextPool.size() < eliteCount + offspringCount) {
+            ChunkGenome child;
+            if (config.strategy == EvolutionStrategy::MuPlusLambda) {
+                child = evaluated[parent(random)].genome;
+                mutateDiscrete(child, config.mutationGenes, random);
+            } else {
+                const auto& first = evaluated[parent(random)].genome;
+                const auto& second = evaluated[parent(random)].genome;
+                child = crossover(first, second, random);
+                mutateGenome(child, random);
+            }
+            nextPool.push_back(child);
         }
+        pool = std::move(nextPool);
         ++generation;
     }
     return evaluated;
@@ -530,8 +557,38 @@ bool saveGenePool(const std::vector<EvaluatedGenome>& pool, const std::string& p
 }
 
 int main(int argc, char** argv) {
-    Verilated::commandArgs(argc, argv);
-    const std::string patternPath = argc > 1 ? argv[1] : "wanted_outputs.txt";
+    EvolutionConfig evolutionConfig;
+    std::string patternPath = "wanted_outputs.txt";
+    for (int argument = 1; argument < argc; ++argument) {
+        const std::string option = argv[argument];
+        if (option.rfind("--strategy=", 0) == 0) {
+            const std::string value = option.substr(11);
+            if (value == "es")
+                evolutionConfig.strategy = EvolutionStrategy::MuPlusLambda;
+            else if (value != "ga") {
+                std::cerr << "Unknown strategy: " << value << "\n";
+                return 1;
+            }
+        } else if (option.rfind("--mu=", 0) == 0) {
+            evolutionConfig.mu = std::stoul(option.substr(5));
+        } else if (option.rfind("--lambda=", 0) == 0) {
+            evolutionConfig.lambda = std::stoul(option.substr(9));
+        } else if (option.rfind("--mutation-genes=", 0) == 0) {
+            evolutionConfig.mutationGenes = std::stoi(option.substr(17));
+        } else if (option.rfind("--", 0) == 0) {
+            std::cerr << "Unknown option: " << option << "\n";
+            return 1;
+        } else {
+            patternPath = option;
+        }
+    }
+    if (evolutionConfig.mu == 0 || evolutionConfig.lambda == 0 ||
+        evolutionConfig.mu + evolutionConfig.lambda > POPULATION_SIZE ||
+        evolutionConfig.mutationGenes < 1) {
+        std::cerr << "Invalid evolution configuration\n";
+        return 1;
+    }
+
     std::vector<WantedPattern> patterns;
     if (!loadWantedPatterns(patternPath, patterns)) {
         std::cerr << "Could not load wanted patterns from " << patternPath << "\n";
@@ -555,7 +612,7 @@ int main(int argc, char** argv) {
                   << " | wanted output: " << pattern.outputBits << "\n";
 
         const auto evaluated = evolve(pool, pattern.output, pattern.input, random,
-                          patternIndex, patterns.size());
+                          patternIndex, patterns.size(), evolutionConfig);
         if (evaluated.empty()) {
             std::cerr << "Target " << (patternIndex + 1)
                       << " produced an empty evaluation pool\n";

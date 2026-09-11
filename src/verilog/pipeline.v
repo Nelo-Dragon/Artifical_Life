@@ -49,7 +49,9 @@ module pipeline #(
     output wire [XS-1:0] in_chunk_out,
     output wire [XS-1:0] mem_out,
     output wire [XS-1:0] cortex_out,
-    output wire [XS-1:0] final_out
+    output wire [XS-1:0] final_out,
+    output wire [(XS*3)-1:0] out_accu_tail,
+    output wire [(XS*3)-1:0] out_thresh_tail
 );
 
     localparam N = XS * YS;
@@ -59,8 +61,8 @@ module pipeline #(
     wire [3:0] cortex_in [0:XS-1];
     wire [3:0] out_in [0:XS-1];
 
-    // Unused per-chunk diagnostic outputs (only the output chunk's are
-    // exposed above, since that is what the joint fine-tune tiebreaker uses).
+    // Unused per-chunk diagnostic outputs. The output chunk's accumulator and
+    // threshold arrays are exposed for the joint fine-tune tiebreaker.
     wire [3:0] in_Mask_unused [0:N-1];
     wire [1:0] in_Sens_unused [0:N-1];
     wire [3:0] in_fire_unused [0:N-1];
@@ -171,6 +173,13 @@ module pipeline #(
         .fire_msk(out_fire_unused), .accu_msk(out_accu_unused), .thresh_msk(out_thresh_unused),
         .out(final_out)
     );
+
+    generate
+        for (column = 0; column < XS; column = column + 1) begin : gen_out_diagnostics
+            assign out_accu_tail[column * 3 +: 3] = out_accu_unused[(YS - 1) * XS + column];
+            assign out_thresh_tail[column * 3 +: 3] = out_thresh_unused[(YS - 1) * XS + column];
+        end
+    endgenerate
 
 endmodule
 /* verilator lint_on DECLFILENAME */

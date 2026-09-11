@@ -193,6 +193,28 @@ python3 src/train_help.py --width 16 --operand-bits 4 --repeats 4
 The file describes desired input/output patterns; it does not add an input
 interpreter or make the Verilog chunk perform binary arithmetic by itself.
 
+The command-line trainer uses an exact native C++ chunk evaluator in its inner
+loop, while Verilator remains available as the reference implementation. Run
+the randomized equivalence check with:
+
+```sh
+make native-equivalence MAIN_XS=4 MAIN_YS=8
+./obj_equivalence/native_equivalence
+```
+
+The original crossover-based genetic algorithm remains the default. To compare
+it by wall-clock time with the discrete `(mu + lambda)` strategy, use:
+
+```sh
+./obj_dir/run_sim wanted_outputs.txt --strategy=es --mu=32 --lambda=224 \
+  --mutation-genes=2
+```
+
+The ES options select elite count, offspring count, and the number of
+categorical mask/sensitivity genes replaced per offspring. Keep the same
+random seed and time budget when comparing strategies; generation count alone
+is not a throughput or time-to-solution comparison.
+
 ## Run The Staged Curriculum Trainer
 
 `make curriculum-build` compiles a CPU trainer that runs the five-stage

@@ -7,6 +7,7 @@ SRC_DIR = src
 BUILD_DIR = obj_dir
 SIM_BUILD_DIR = obj_sim
 TRAIN_BUILD_DIR = obj_train
+EQUIV_BUILD_DIR = obj_equivalence
 
 # Find ALL .v files in SRC_DIR and all of its subdirectories
 VERILOG_SRCS = $(shell find $(SRC_DIR) -name "*.v")
@@ -92,7 +93,7 @@ PIPELINE_BUILD_DIR = obj_pipeline
 PIPELINE_TARGET = pipeline_server
 PIPELINE_CPP_SRC = $(SRC_DIR)/pipeline_server.cpp
 
-.PHONY: all run sim sim-build train train-build clean cuda cuda-train cuda-train-server curriculum curriculum-build fpga-lint fpga-synth pipeline-build pipeline-server
+.PHONY: all run sim sim-build train train-build native-equivalence clean cuda cuda-train cuda-train-server curriculum curriculum-build fpga-lint fpga-synth pipeline-build pipeline-server
 
 all:
 	$(VERILATOR) $(VERILATOR_FLAGS)
@@ -113,8 +114,17 @@ train:
 	$(MAKE) train-build
 	./$(TRAIN_BUILD_DIR)/$(TRAIN_TARGET)
 
+native-equivalence:
+	mkdir -p $(EQUIV_BUILD_DIR)
+	$(VERILATOR) -Wall --cc $(VERILOG_SRCS) --top-module $(TOP_MODULE) \
+		-GXS=$(MAIN_XS) -GYS=$(MAIN_YS) \
+		--exe src/native_equivalence.cpp -I$(SRC_DIR) \
+		--Mdir $(EQUIV_BUILD_DIR) --build \
+		-CFLAGS "-DEQUIV_XS=$(MAIN_XS) -DEQUIV_YS=$(MAIN_YS)" \
+		-o native_equivalence
+
 clean:
-	rm -rf $(BUILD_DIR) $(SIM_BUILD_DIR) $(TRAIN_BUILD_DIR) $(CURRICULUM_BUILD_DIR) $(PIPELINE_BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(SIM_BUILD_DIR) $(TRAIN_BUILD_DIR) $(CURRICULUM_BUILD_DIR) $(PIPELINE_BUILD_DIR) $(EQUIV_BUILD_DIR)
 
 pipeline-build:
 	mkdir -p $(PIPELINE_BUILD_DIR)

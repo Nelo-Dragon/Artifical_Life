@@ -675,8 +675,13 @@ Evaluation evaluatePipelineSingle(Vpipeline& pipe, const FourGenomes& genomes,
         if (cycle < totalWarmup) continue;
         const std::uint64_t output = bitsFromValue(pipe.final_out);
         const Score score = scoreOutput(output, pattern.output);
-        const double tiebreaker = computeTiebreaker(&pipe.out_thresh_msk[(YS - 1) * XS],
-                                                     &pipe.out_accu_msk[(YS - 1) * XS], pattern.output);
+        std::array<std::uint8_t, XS> tailThresh{};
+        std::array<std::uint8_t, XS> tailAccu{};
+        for (int x = 0; x < XS; ++x) {
+            tailThresh[x] = static_cast<std::uint8_t>((pipe.out_thresh_tail >> (x * 3)) & 0x7u);
+            tailAccu[x] = static_cast<std::uint8_t>((pipe.out_accu_tail >> (x * 3)) & 0x7u);
+        }
+        const double tiebreaker = computeTiebreaker(tailThresh.data(), tailAccu.data(), pattern.output);
         accumulator.add(score, tiebreaker);
     }
     return accumulator.finalize();
