@@ -49,9 +49,7 @@ module pipeline #(
     output wire [XS-1:0] in_chunk_out,
     output wire [XS-1:0] mem_out,
     output wire [XS-1:0] cortex_out,
-    output wire [XS-1:0] final_out,
-    output wire [2:0] out_accu_msk [0:(XS*YS)-1],
-    output wire [2:0] out_thresh_msk [0:(XS*YS)-1]
+    output wire [XS-1:0] final_out
 );
 
     localparam N = XS * YS;
@@ -84,6 +82,8 @@ module pipeline #(
     wire [3:0] out_Mask_unused [0:N-1];
     wire [1:0] out_Sens_unused [0:N-1];
     wire [3:0] out_fire_unused [0:N-1];
+    wire [2:0] out_accu_unused [0:N-1];
+    wire [2:0] out_thresh_unused [0:N-1];
 
     genvar column;
     generate
@@ -168,7 +168,7 @@ module pipeline #(
         .mask_msk(out_mask), .sens_msk(out_sens),
         .in(out_in),
         .Mask_msk(out_Mask_unused), .Sens_msk(out_Sens_unused),
-        .fire_msk(out_fire_unused), .accu_msk(out_accu_msk), .thresh_msk(out_thresh_msk),
+        .fire_msk(out_fire_unused), .accu_msk(out_accu_unused), .thresh_msk(out_thresh_unused),
         .out(final_out)
     );
 
